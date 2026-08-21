@@ -1,0 +1,68 @@
+name: ai-company
+
+# public 저장소면 Actions 실행 시간이 무제한(=0원)이다.
+# cron은 UTC 기준. KST = UTC+9.
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # 30분마다 큐 처리 (worker)
+    - cron: '0 0 * * *'      # 09:00 KST — 리서치
+    - cron: '0 12 * * *'     # 21:00 KST — CFO 일일 결산
+    - cron: '0 23 * * 0'     # 월 08:00 KST — CEO 주간 전략
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'worker | kick research | kick ceo | kick cfo | health | seed'
+        default: worker
+
+concurrency:
+  group: ai-company
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      MAX_STEPS: '8'
+      BATCH_SIZE: '3'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 실행할 명령 결정
+        id: pick
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 0 * * *")   echo "cmd=kick research" >> $GITHUB_OUTPUT ;;
+            "0 12 * * *")  echo "cmd=kick cfo"      >> $GITHUB_OUTPUT ;;
+            "0 23 * * 0")  echo "cmd=kick ceo"      >> $GITHUB_OUTPUT ;;
+            *)             echo "cmd=${{ github.event.inputs.command || 'worker' }}" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: 에이전트 실행
+        run: node src/run.js ${{ steps.pick.outputs.cmd }}
+
+      - name: 결과물 커밋
+        run: |
+          git config user.name  "ai-company[bot]"
+          git config user.email "bot@users.noreply.github.com"
+          git add site/ || true
+          if git diff --staged --quiet; then
+            echo "변경 없음"
+          else
+            git commit -m "chore(agent): $(date -u +%Y-%m-%dT%H:%MZ) 결과물 갱신"
+            git push
+          fi
