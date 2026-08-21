@@ -4,8 +4,9 @@
 //   node src/run.js kick research   # 특정 역할을 직접 깨움 (하루 1회 등)
 
 import { ROLES } from './roles/index.js';
+import { listModels, chat } from './llm.js';
 import { runAgent } from './agent.js';
-import { claimTasks, finishTask, enqueue, log, revenueSummary, recall } from './db.js';
+import { claimTasks, finishTask, enqueue, log, revenueSummary, recall, update } from './db.js';
 import { toolImpl } from './tools.js';
 
 const BATCH = Number(process.env.BATCH_SIZE || 3);
@@ -80,11 +81,74 @@ async function health() {
   await toolImpl.notify({ text: `헬스체크 정상. 30일 수익 ${rev.total}원`, title: 'AI Company' });
 }
 
+
+/** 어느 키가 살아있고 어느 게 죽었는지 하나씩 짚어준다. */
+async function doctor() {
+  console.log('=== 1. Supabase ===');
+  try {
+    const rev = await revenueSummary(1);
+    console.log(`  OK — 연결됨 (기록 ${rev.count}건)`);
+  } catch (e) {
+    console.log(`  실패 — ${e.message}`);
+  }
+
+  const providers = [
+    ['groq', 'GROQ_API_KEY', 'https://console.groq.com/keys'],
+    ['cerebras', 'CEREBRAS_API_KEY', 'https://cloud.cerebras.ai'],
+    ['gemini', 'GEMINI_API_KEY', 'https://aistudio.google.com/apikey'],
+    ['openrouter', 'OPENROUTER_API_KEY', 'https://openrouter.ai/keys'],
+  ];
+
+  for (const [name, envName, url] of providers) {
+    const raw = process.env[envName];
+    console.log(`\n=== ${name} ===`);
+    if (!raw) {
+      console.log(`  건너뜀 — ${envName} 없음`);
+      continue;
+    }
+    if (raw !== raw.trim() || /^["']|["']$/.test(raw)) {
+      console.log(`  경고 — 값에 공백이나 따옴표가 붙어 있다. .env를 확인해라.`);
+    }
+    console.log(`  키: ${raw.slice(0, 6)}…${raw.slice(-4)} (${raw.length}자)`);
+    try {
+      const ids = await listModels(name);
+      console.log(`  모델 ${ids.length}개 조회됨`);
+      console.log(`  예시: ${ids.slice(0, 8).join(', ')}`);
+    } catch (e) {
+      console.log(`  /models 실패 — ${e.message}`);
+      console.log(`  → 키를 다시 발급해라: ${url}`);
+      continue;
+    }
+    try {
+      const r = await chat({
+        messages: [{ role: 'user', content: '1+1은? 숫자만.' }],
+        forceProvider: name,
+        maxRetries: 0,
+      });
+      console.log(`  대화 테스트 OK — model=${r.model}, 응답="${String(r.message.content).trim().slice(0, 20)}"`);
+    } catch (e) {
+      console.log(`  대화 테스트 실패 — ${e.message}`);
+    }
+  }
+}
+
+/** 재시도 한도에 걸려 멈춘 작업을 되살린다. */
+async function reset() {
+  const rows = await update('tasks', 'status=in.(running,failed)', {
+    status: 'pending',
+    attempts: 0,
+    updated_at: new Date().toISOString(),
+  });
+  console.log(`${rows?.length || 0}건을 pending / attempts=0 으로 되돌렸다.`);
+}
+
 const [cmd, arg] = process.argv.slice(2);
 const main = {
   worker,
   kick: () => kick(arg),
   health,
+  doctor,
+  reset,
   seed: async () => {
     await enqueue({ role: 'ceo', title: '회사 최초 전략 수립', priority: 1 });
     console.log('초기 작업 등록 완료');
@@ -92,7 +156,7 @@ const main = {
 }[cmd || 'worker'];
 
 if (!main) {
-  console.error('사용법: node src/run.js [worker|kick <role>|health|seed]');
+  console.error('사용법: node src/run.js [worker|kick <role>|health|doctor|reset|seed]');
   process.exit(1);
 }
 

@@ -7,29 +7,73 @@ const PROVIDERS = [
     name: 'groq',
     base: 'https://api.groq.com/openai/v1',
     key: () => process.env.GROQ_API_KEY,
-    model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+    model: () => process.env.GROQ_MODEL,
   },
   {
     name: 'cerebras',
     base: 'https://api.cerebras.ai/v1',
     key: () => process.env.CEREBRAS_API_KEY,
-    model: process.env.CEREBRAS_MODEL || 'llama-3.3-70b',
+    model: () => process.env.CEREBRAS_MODEL,
   },
   {
     name: 'gemini',
     base: 'https://generativelanguage.googleapis.com/v1beta/openai',
     key: () => process.env.GEMINI_API_KEY,
-    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    model: () => process.env.GEMINI_MODEL,
   },
   {
     name: 'openrouter',
     base: 'https://openrouter.ai/api/v1',
     key: () => process.env.OPENROUTER_API_KEY,
-    model: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
+    model: () => process.env.OPENROUTER_MODEL,
   },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------- 모델 자동 탐색 ----------
+// 제공자들이 모델을 수시로 폐기해서 이름을 하드코딩하면 언젠가 반드시 404가 난다.
+// .env에 *_MODEL이 없으면 /models 목록을 받아 쓸 만한 걸 직접 고른다.
+
+const modelCache = new Map();
+
+// 채팅용이 아닌 것들 — 이름에 이게 있으면 후보에서 뺀다
+const NOT_CHAT = /whisper|tts|embed|embedding|guard|moderat|rerank|image|vision-only|audio|transcribe/i;
+// 선호 순서 (위에 있을수록 우선)
+const PREFER = [/70b|120b|large/i, /gpt-oss|llama|gemini|qwen|mistral/i, /instruct|versatile|flash/i];
+
+export async function listModels(providerName) {
+  const p = PROVIDERS.find((x) => x.name === providerName);
+  if (!p || !p.key()) return [];
+  const res = await fetch(`${p.base}/models`, { headers: { Authorization: `Bearer ${p.key()}` } });
+  if (!res.ok) throw new Error(`${p.name} /models ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const json = await res.json();
+  return (json.data || []).map((m) => m.id).filter(Boolean);
+}
+
+function pickModel(ids) {
+  const usable = ids.filter((id) => !NOT_CHAT.test(id));
+  if (!usable.length) return null;
+  for (const rule of PREFER) {
+    const hit = usable.filter((id) => rule.test(id));
+    if (hit.length) return hit.sort((a, b) => a.length - b.length)[0];
+  }
+  return usable[0];
+}
+
+async function resolveModel(p) {
+  const fromEnv = p.model();
+  if (fromEnv) return fromEnv;
+  if (modelCache.has(p.name)) return modelCache.get(p.name);
+  const ids = await listModels(p.name);
+  const chosen = pickModel(ids);
+  if (!chosen) throw new Error(`${p.name}: 쓸 수 있는 채팅 모델을 못 찾음`);
+  modelCache.set(p.name, chosen);
+  console.log(`[llm] ${p.name} 모델 자동 선택: ${chosen}  (.env에 ${p.name.toUpperCase()}_MODEL=${chosen} 로 고정 가능)`);
+  return chosen;
+}
+
+
 
 function activeProviders() {
   const list = PROVIDERS.filter((p) => p.key());
@@ -57,7 +101,7 @@ export async function chat({ messages, tools, temperature = 0.4, forceProvider, 
   for (const p of list) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const body = { model: p.model, messages, temperature };
+        const body = { model: await resolveModel(p), messages, temperature };
         if (tools && tools.length) {
           body.tools = tools;
           body.tool_choice = 'auto';
@@ -81,7 +125,14 @@ export async function chat({ messages, tools, temperature = 0.4, forceProvider, 
           throw new Error(`${p.name} rate limited (${res.status})`);
         }
         if (!res.ok) {
-          throw new Error(`${p.name} ${res.status}: ${(await res.text()).slice(0, 300)}`);
+          const text = await res.text();
+          // 모델이 폐기됐으면 캐시를 비우고 목록을 다시 받아 한 번 더 시도
+          if (res.status === 404 && /model/i.test(text) && !p.model() && attempt < maxRetries) {
+            modelCache.delete(p.name);
+            console.warn(`[llm] ${p.name} 모델 폐기됨 → 목록 재조회`);
+            continue;
+          }
+          throw new Error(`${p.name} ${res.status}: ${text.slice(0, 300)}`);
         }
 
         const json = await res.json();
@@ -90,7 +141,7 @@ export async function chat({ messages, tools, temperature = 0.4, forceProvider, 
         return {
           message: choice.message,
           provider: p.name,
-          model: p.model,
+          model: body.model,
           usage: json.usage || {},
         };
       } catch (e) {
