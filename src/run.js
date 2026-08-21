@@ -113,7 +113,7 @@ async function doctor() {
     try {
       const ids = await listModels(name);
       console.log(`  모델 ${ids.length}개 조회됨`);
-      console.log(`  예시: ${ids.slice(0, 8).join(', ')}`);
+      ids.forEach((id) => console.log(`    - ${id}`));
     } catch (e) {
       console.log(`  /models 실패 — ${e.message}`);
       console.log(`  → 키를 다시 발급해라: ${url}`);

@@ -37,15 +37,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const modelCache = new Map();
 
+// Gemini는 2026년부터 AQ. 로 시작하는 새 키를 발급하는데, 일부 계정에서 Bearer 인증이
+// 401로 거부된다. Bearer가 막히면 x-goog-api-key 로 한 번 더 시도한다.
+const altAuth = new Set();
+
+function authHeaders(p) {
+  return altAuth.has(p.name)
+    ? { 'x-goog-api-key': p.key() }
+    : { Authorization: `Bearer ${p.key()}` };
+}
+
 // 채팅용이 아닌 것들 — 이름에 이게 있으면 후보에서 뺀다
-const NOT_CHAT = /whisper|tts|embed|embedding|guard|moderat|rerank|image|vision-only|audio|transcribe/i;
+const NOT_CHAT = /whisper|tts|embed|embedding|guard|moderat|rerank|image|vision-only|audio|transcribe|orpheus|playai|speech|sora|veo|imagen|dall|canopylabs|distil/i;
 // 선호 순서 (위에 있을수록 우선)
-const PREFER = [/70b|120b|large/i, /gpt-oss|llama|gemini|qwen|mistral/i, /instruct|versatile|flash/i];
+const PREFER = [
+  /gpt-oss|kimi|deepseek|qwen3|llama-4|llama-3\.[13]/i,
+  /compound(?!-mini)/i,
+  /gemini.*(flash|pro)/i,
+  /llama|qwen|mistral|gemma|allam|compound/i,
+];
 
 export async function listModels(providerName) {
   const p = PROVIDERS.find((x) => x.name === providerName);
   if (!p || !p.key()) return [];
-  const res = await fetch(`${p.base}/models`, { headers: { Authorization: `Bearer ${p.key()}` } });
+  let res = await fetch(`${p.base}/models`, { headers: authHeaders(p) });
+  if (res.status === 401 && !altAuth.has(p.name)) {
+    altAuth.add(p.name);
+    res = await fetch(`${p.base}/models`, { headers: authHeaders(p) });
+    if (!res.ok) altAuth.delete(p.name);
+  }
   if (!res.ok) throw new Error(`${p.name} /models ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const json = await res.json();
   return (json.data || []).map((m) => m.id).filter(Boolean);
@@ -108,10 +128,7 @@ export async function chat({ messages, tools, temperature = 0.4, forceProvider, 
         }
         const res = await fetch(`${p.base}/chat/completions`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${p.key()}`,
-          },
+          headers: { 'Content-Type': 'application/json', ...authHeaders(p) },
           body: JSON.stringify(body),
         });
 
@@ -123,6 +140,11 @@ export async function chat({ messages, tools, temperature = 0.4, forceProvider, 
             continue;
           }
           throw new Error(`${p.name} rate limited (${res.status})`);
+        }
+        if (res.status === 401 && !altAuth.has(p.name) && attempt < maxRetries) {
+          altAuth.add(p.name);
+          console.warn(`[llm] ${p.name} Bearer 거부됨 → x-goog-api-key 로 재시도`);
+          continue;
         }
         if (!res.ok) {
           const text = await res.text();
