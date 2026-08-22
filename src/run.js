@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 // run.js — 진입점. GitHub Actions cron이 이 파일을 역할별로 호출한다.
 //   node src/run.js worker          # 큐에 쌓인 작업 처리 (30분마다)
+//   node src/run.js worker qa       # 그 역할의 작업만 처리 (단계별 검증용)
+//   node src/run.js build           # site/posts/*.md 를 실제 HTML로 굽는다
 //   node src/run.js kick research   # 특정 역할을 직접 깨움 (하루 1회 등)
 
 import { ROLES } from './roles/index.js';
 import { listModels, chat } from './llm.js';
 import { runAgent } from './agent.js';
 import { claimTasks, finishTask, enqueue, log, revenueSummary, recall, update } from './db.js';
-import { toolImpl } from './tools.js';
+import { toolImpl, setCurrentTask } from './tools.js';
+import { build } from './site.js';
 
 const BATCH = Number(process.env.BATCH_SIZE || 3);
+
+const MAX_ROUNDS = Number(process.env.MAX_ROUNDS || 4);
 
 async function handleTask(task) {
   const role = ROLES[task.role];
@@ -17,6 +22,26 @@ async function handleTask(task) {
     await finishTask(task.id, { status: 'failed', result: { error: `없는 역할: ${task.role}` } });
     return;
   }
+
+  // 반려 → 수정 → 재검수가 끝없이 도는 걸 끊는다. 출처가 내용을 뒷받침하지 못하는 주제는
+  // 몇 번을 고쳐도 통과하지 못한다. 그런 건 버리는 게 맞다.
+  //
+  // 한도는 **수정(producer)** 에만 건다. 검수(qa)까지 막으면 방금 고친 초안이 판정도 못 받고 죽는다.
+  // 실제로 그렇게 죽였다. 루프를 만드는 쪽은 수정이지 검수가 아니다.
+  const round = Number(task.payload?.round || 0);
+  if (task.role === 'producer' && round >= MAX_ROUNDS) {
+    await log(task.role, 'warn', `작업 ${task.id}: ${round}번째 왕복 — 이 주제는 접는다`);
+    await finishTask(task.id, {
+      status: 'failed',
+      result: { error: `왕복 한도(${MAX_ROUNDS}) 초과. 출처가 내용을 뒷받침하지 못하는 주제로 보인다.` },
+    });
+    await toolImpl.notify({
+      text: `"${task.title}" 를 ${round}회 왕복 끝에 접었다. 출처가 주장을 뒷받침하지 못한다.`,
+      title: 'AI Company — 주제 폐기',
+    });
+    return;
+  }
+  setCurrentTask(task);
   const prompt = [
     `작업: ${task.title}`,
     `payload: ${JSON.stringify(task.payload || {})}`,
@@ -24,25 +49,52 @@ async function handleTask(task) {
   ].join('\n');
 
   try {
-    const r = await runAgent({ role: task.role, system: role.system, task: prompt, tools: role.tools });
+    const r = await runAgent({
+      role: task.role,
+      system: role.system,
+      task: prompt,
+      tools: role.tools,
+      maxSteps: role.maxSteps,
+      handoff: role.handoff,
+    });
+    // 역할이 반드시 호출해야 하는 툴을 실제로 성공시켰는지 확인한다.
+    const called = new Set(r.trace.filter((t) => !t.result?.error).map((t) => t.tool));
+    const missing = (role.requires || []).filter((t) => !called.has(t));
+    const ok = !r.truncated && missing.length === 0;
+    if (missing.length) {
+      await log(task.role, 'warn', `필수 작업 누락: ${missing.join(', ')} — 실패 처리하고 재시도한다`);
+    }
     await finishTask(task.id, {
-      status: r.truncated ? 'failed' : 'done',
-      result: { output: r.output, steps: r.steps, tokens: r.tokens },
+      status: ok ? 'done' : 'pending',
+      result: { output: r.output, steps: r.steps, tokens: r.tokens, missing },
     });
   } catch (e) {
     await log(task.role, 'error', `작업 ${task.id} 실패: ${e.message}`);
     await finishTask(task.id, { status: 'pending', result: { error: e.message } }); // 재시도 (attempts<3)
+  } finally {
+    setCurrentTask(null);
   }
 }
 
-async function worker() {
-  const tasks = await claimTasks(null, BATCH);
+/** 파일이 바뀌었을 수 있으니 실행 끝에 사이트를 다시 굽는다. 실패해도 본 작업은 살린다. */
+async function rebuildSite() {
+  try {
+    await build();
+  } catch (e) {
+    console.warn('사이트 빌드 실패(작업 자체는 완료됨):', e.message);
+  }
+}
+
+async function worker(roleFilter) {
+  // 역할을 주면 그 역할의 작업만 집는다. 특정 단계만 검증할 때 쓴다.
+  const tasks = await claimTasks(roleFilter || null, BATCH);
   if (!tasks.length) {
-    console.log('처리할 작업 없음');
+    console.log(roleFilter ? `${roleFilter} 작업 없음` : '처리할 작업 없음');
     return;
   }
-  console.log(`작업 ${tasks.length}건 처리 시작`);
+  console.log(`작업 ${tasks.length}건 처리 시작${roleFilter ? ` (${roleFilter}만)` : ''}`);
   for (const t of tasks) await handleTask(t);
+  await rebuildSite();
 }
 
 async function kick(roleName) {
@@ -62,8 +114,11 @@ async function kick(roleName) {
     system: role.system,
     task: `정기 실행이다. 직무기술서대로 이번 차례의 일을 수행하라.${context}`,
     tools: role.tools,
+    maxSteps: role.maxSteps,
+    handoff: role.handoff,
   });
   console.log(`[${roleName}] ${r.output}`);
+  await rebuildSite();
 }
 
 async function health() {
@@ -144,11 +199,12 @@ async function reset() {
 
 const [cmd, arg] = process.argv.slice(2);
 const main = {
-  worker,
+  worker: () => worker(arg),
   kick: () => kick(arg),
   health,
   doctor,
   reset,
+  build: () => build(),
   seed: async () => {
     await enqueue({ role: 'ceo', title: '회사 최초 전략 수립', priority: 1 });
     console.log('초기 작업 등록 완료');
@@ -156,7 +212,7 @@ const main = {
 }[cmd || 'worker'];
 
 if (!main) {
-  console.error('사용법: node src/run.js [worker|kick <role>|health|doctor|reset|seed]');
+  console.error('사용법: node src/run.js [worker [role]|kick <role>|build|health|doctor|reset|seed]');
   process.exit(1);
 }
 

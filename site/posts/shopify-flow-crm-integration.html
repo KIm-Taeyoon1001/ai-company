@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automating Customer Segmentation with Shopify Flow and External CRMs</title>
+<style>
+:root { color-scheme: light dark; --fg:#1a1a1a; --bg:#fff; --muted:#5c6470; --line:#e2e5ea; --link:#0b5fbf; }
+@media (prefers-color-scheme: dark) {
+  :root { --fg:#e8e8e8; --bg:#16181c; --muted:#9aa3ae; --line:#2c3138; --link:#7db3ff; }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+  font: 16px/1.65 -apple-system, "Segoe UI", "Malgun Gothic", Roboto, sans-serif; }
+.wrap { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+a { color: var(--link); }
+h1 { font-size: 1.8rem; line-height:1.3; margin: 0 0 .35rem; }
+h2 { font-size: 1.3rem; margin: 2.2rem 0 .6rem; padding-top:.4rem; border-top:1px solid var(--line); }
+h3 { font-size: 1.08rem; margin: 1.5rem 0 .4rem; }
+p, li { overflow-wrap: anywhere; }
+ul, ol { padding-left: 1.3rem; }
+li { margin: .3rem 0; }
+code { background: rgba(127,127,127,.16); padding: .1em .35em; border-radius: 3px; font-size: .9em; }
+pre { background: rgba(127,127,127,.12); padding: .9rem 1rem; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+blockquote { margin: 1rem 0; padding: .3rem 0 .3rem 1rem; border-left: 3px solid var(--line); color: var(--muted); }
+hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
+.table-wrap { overflow-x: auto; margin: 1rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: .94rem; }
+th, td { border: 1px solid var(--line); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+th { background: rgba(127,127,127,.1); }
+.meta { color: var(--muted); font-size: .88rem; margin: 0 0 2rem; }
+.sources { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: .9rem; color: var(--muted); }
+.sources li { word-break: break-all; }
+.index-list { list-style: none; padding: 0; }
+.index-list li { margin: 0; border-bottom: 1px solid var(--line); }
+.index-list a { display: block; padding: .85rem 0; text-decoration: none; font-weight: 600; }
+.index-list a:hover { text-decoration: underline; }
+.index-list .date { display:block; font-weight: 400; font-size: .82rem; color: var(--muted); }
+footer { margin-top: 3rem; font-size: .82rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Automating Customer Segmentation with Shopify Flow and External CRMs</h1>
+<p class="meta">2026-08-22</p>
+<p>Shopify Flow lets merchants trigger automated actions directly inside Shopify, but to truly segment customers you often need the richer data and segmentation logic that an external CRM offers. By combining Flow with a middleware like Zapier or Make, you can push customer events to your CRM, trigger dynamic tags, and then feed those tags back into Shopify for targeted marketing.</p>
+<h3>Typical Architecture</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Component</th><th>Role</th><th>Example Trigger</th></tr></thead>
+<tbody>
+<tr><td>Shopify Flow</td><td>Event source</td><td>Customer places an order, or a product is added to cart</td></tr>
+<tr><td>Middleware (Zapier/Make)</td><td>Connector</td><td>Receives webhook from Flow, formats data, sends to CRM</td></tr>
+<tr><td>External CRM (HubSpot, Salesforce, Zoho)</td><td>Segmentation engine</td><td>Applies rules, updates contact properties</td></tr>
+<tr><td>Shopify</td><td>Target</td><td>Uses tags or custom fields to segment audiences</td></tr>
+</tbody>
+</table></div>
+<h3>Why Use Zapier or Make?</h3>
+<ul>
+<li><strong>Ease of use</strong> – Zapier wins on quick setup for non‑technical teams (source: UTech Automations). | <strong>Pricing</strong> – Make offers 60–75 % lower cost at scale (source: UTech Automations). | <strong>App coverage</strong> – Zapier is the best for app integrations (source: Retail Exec). |</li>
+</ul>
+<h3>Step‑by‑Step Flow</h3>
+<ol>
+<li><strong>Create a Flow rule</strong> in Shopify that fires on a customer event (e.g., <code>Order Created</code>).</li>
+<li><strong>Add a webhook action</strong> that sends the order JSON to a public URL.</li>
+<li><strong>Set up a Zap/Make scenario</strong> that receives the webhook, parses the payload, and calls the CRM API to create or update a contact.</li>
+<li><strong>Apply segmentation rules</strong> in the CRM (e.g., <code>Total Spend &gt; $500</code> → tag <code>VIP</code>).</li>
+<li><strong>Send the tag back</strong> to Shopify via a second webhook or use a CRM‑to‑Shopify integration to update customer tags.</li>
+<li><strong>Use Shopify tags</strong> in email automations (Klaviyo, Mailchimp) or on‑site personalization.</li>
+</ol>
+<h3>Best Practices</h3>
+<ul>
+<li><strong>Use unique identifiers</strong> (email or Shopify customer ID) to avoid duplicate contacts.</li>
+<li><strong>Batch updates</strong> when possible to reduce API calls.</li>
+<li><strong>Monitor webhook health</strong>; set up retry logic in Make or Zapier.</li>
+<li><strong>Keep data minimal</strong> – only send fields needed for segmentation to stay within API limits.</li>
+</ul>
+<p>By automating this pipeline, you can achieve real‑time customer segmentation without manual data entry, improving targeting accuracy and boosting customer lifetime value.</p>
+<div class="sources"><strong>출처</strong>
+<ul>
+<li><a href="https://ustechautomations.com/resources/blog/zapier-vs-make-ecommerce-automation-2026" rel="nofollow noopener">https://ustechautomations.com/resources/blog/zapier-vs-make-ecommerce-automation-2026</a></li>
+<li><a href="https://theretailexec.com/tools/best-ecommerce-automation-tools/" rel="nofollow noopener">https://theretailexec.com/tools/best-ecommerce-automation-tools/</a></li>
+</ul>
+</div>
+<footer>자동 생성됨 · <a href="../index.html">목록</a></footer>
+</div>
+</body>
+</html>
