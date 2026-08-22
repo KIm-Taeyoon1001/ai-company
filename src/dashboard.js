@@ -100,7 +100,15 @@ async function listMd(dir) {
       const raw = await fs.readFile(path.join(ROOT, dir, n), 'utf8');
       const title = /^title:\s*(.+)$/m.exec(raw)?.[1]?.trim() || n.replace(/\.md$/, '');
       const date = /^date:\s*(.+)$/m.exec(raw)?.[1]?.trim() || '';
-      out.push({ slug: n.replace(/\.md$/, ''), title, date, bytes: Buffer.byteLength(raw) });
+      const urls = raw.match(/https?:\/\/[^\s"'\],]+/g) || [];
+      out.push({
+        slug: n.replace(/\.md$/, ''),
+        title,
+        date,
+        bytes: Buffer.byteLength(raw),
+        body: dir === 'drafts' ? raw : '',
+        urls,
+      });
     }
     return out.sort((a, b) => (b.date > a.date ? 1 : -1));
   } catch {
@@ -108,19 +116,39 @@ async function listMd(dir) {
   }
 }
 
-async function gather() {
+export async function gather() {
+  // 조회가 실패했는데 0으로 그리면 안 된다. 관제 화면이 "정상"처럼 보이는 게 최악이다.
+  const errors = [];
+  const guard = (label, p, fallback) =>
+    p.catch((e) => {
+      errors.push(`${label}: ${e.message.replace(/\s+/g, ' ').slice(0, 120)}`);
+      return fallback;
+    });
+
   const [tasks, logs, strategy, revenue, published, drafts, providers] = await Promise.all([
-    select('tasks', 'select=id,role,title,status,attempts,priority,payload,result,created_at,updated_at&order=id.desc&limit=80').catch(() => []),
-    select('logs', 'select=ts,role,level,msg&order=ts.desc&limit=60').catch(() => []),
-    recall('strategy').catch(() => null),
-    revenueSummary(30).catch(() => ({ total: 0, count: 0, bySource: {} })),
+    guard('작업 큐', select('tasks', 'select=id,role,title,status,attempts,priority,payload,result,created_at,updated_at&order=id.desc&limit=80'), null),
+    guard('로그', select('logs', 'select=ts,role,level,msg&order=ts.desc&limit=60'), null),
+    guard('전략', recall('strategy'), null),
+    guard('장부', revenueSummary(30), null),
     listMd('site/posts'),
     listMd('drafts'),
     providerHealth(),
   ]);
   const slug = await repoSlug();
   const ci = await ciRuns(slug);
-  return { tasks, logs, strategy, revenue, published, drafts, providers, ci, slug };
+  return {
+    tasks: tasks || [],
+    logs: logs || [],
+    strategy,
+    revenue: revenue || { total: 0, count: 0, bySource: {} },
+    published,
+    drafts,
+    providers,
+    ci,
+    slug,
+    errors,
+    stale: { tasks: tasks === null, logs: logs === null, revenue: revenue === null },
+  };
 }
 
 // ---------- 표현 ----------
@@ -372,7 +400,43 @@ function usageSection(d) {
 </section>`;
 }
 
-function render(d) {
+function job(opts) {
+  const j = opts.job;
+  if (!j) return '';
+  if (j.running) return `${j.running} 실행 중…`;
+  if (j.last) return `마지막: ${j.last.name} ${j.last.ok ? '완료' : '실패 — ' + j.last.detail}`;
+  return '대기 중';
+}
+
+/** 검수 대기 초안 한 줄. 서버로 띄운 경우엔 펼쳐서 전문을 읽고 그 자리에서 판정한다. */
+function draftItem(p, live) {
+  const head = `<span class="list__main"><span class="list__title">${esc(p.title)}</span>
+      <span class="list__meta">${esc(p.slug)} · ${esc(p.bytes)}B · 출처 ${esc((p.urls || []).length)}개</span></span>`;
+  if (!live) return `<li>${head}${chip('pending')}</li>`;
+
+  const sources = (p.urls || [])
+    .map((u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`)
+    .join('');
+
+  return `<li class="draft" data-slug="${esc(p.slug)}">
+    <details>
+      <summary>${head}${chip('pending')}</summary>
+      <div class="draft__body">
+        ${sources ? `<div class="draft__src"><strong>출처</strong><ul>${sources}</ul></div>` : '<p class="warnline">출처가 하나도 없다. 통과시키면 안 된다.</p>'}
+        <pre class="draft__text">${esc(p.body || '')}</pre>
+        <div class="act">
+          <button type="button" class="btn btn--ok" data-act="approve" data-slug="${esc(p.slug)}">통과시켜 발행</button>
+          <input type="text" class="act__why" placeholder="반려 사유 (필수)" aria-label="반려 사유">
+          <button type="button" class="btn btn--no" data-act="reject" data-slug="${esc(p.slug)}">반려</button>
+        </div>
+      </div>
+    </details>
+  </li>`;
+}
+
+export function render(d, opts = {}) {
+  const live = !!opts.interactive;
+  const K = opts.token || '';
   const now = new Date();
   const stamp = now.toISOString().slice(0, 16).replace('T', ' ');
   const pending = d.tasks.filter((t) => t.status === 'pending');
@@ -655,6 +719,42 @@ td.title { max-width: 380px; }
 .bar__v { text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
 .usage__caveat { padding: 8px 18px 14px; margin: 0; }
 
+/* ── 검수 조작 ── */
+.draft { flex-direction: column; align-items: stretch; }
+.draft details summary { display: flex; gap: 10px; align-items: baseline; justify-content: space-between;
+  cursor: pointer; list-style: none; }
+.draft details summary::-webkit-details-marker { display: none; }
+.draft details summary:hover .list__title { color: var(--accent); }
+.draft__body { padding-top: 10px; display: flex; flex-direction: column; gap: 9px; }
+.draft__src { font-size: .74rem; color: var(--muted); }
+.draft__src strong { font-size: .68rem; text-transform: uppercase; letter-spacing: .1em; }
+.draft__src ul { margin: 3px 0 0; padding-left: 16px; }
+.draft__src li { word-break: break-all; margin: 1px 0; }
+.draft__text { max-height: 300px; overflow: auto; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 9px 11px; font-family: "IBM Plex Mono", monospace; font-size: .74rem;
+  line-height: 1.6; white-space: pre-wrap; margin: 0; }
+.warnline { margin: 0; font-size: .78rem; color: var(--crit); }
+.act { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.act__why { flex: 1 1 150px; min-width: 0; font: inherit; font-size: .76rem; padding: 5px 8px;
+  border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--ink); }
+.btn { font: inherit; font-size: .76rem; font-weight: 600; padding: 5px 12px; border-radius: 4px;
+  cursor: pointer; border: 1px solid transparent; }
+.btn--ok { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn--no { background: transparent; border-color: var(--crit); color: var(--crit); }
+.btn--ghost { background: transparent; border-color: var(--line-strong); color: var(--ink); }
+.btn:disabled { opacity: .5; cursor: default; }
+.actionbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.actionbar__status { font-size: .78rem; color: var(--muted); }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  background: var(--ink); color: var(--ground); padding: 9px 16px; border-radius: 5px;
+  font-size: .82rem; box-shadow: var(--shadow); max-width: 80vw; }
+.toast--bad { background: var(--crit); color: #fff; }
+
+.alarm { background: var(--surface); border: 1px solid var(--crit); border-left: 3px solid var(--crit);
+  border-radius: var(--r); padding: 11px 14px; font-size: .82rem; }
+.alarm strong { color: var(--crit); }
+.alarm ul { margin: 6px 0 0; padding-left: 18px; font-family: "IBM Plex Mono", monospace; font-size: .74rem; }
+
 a { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 footer { color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); padding-top: 14px; }
@@ -675,6 +775,28 @@ footer { color: var(--muted); font-size: .78rem; border-top: 1px solid var(--lin
     <span class="mono">${esc(stamp)}</span>
   </div>
 </header>
+
+${
+  live
+    ? `<section class="actionbar">
+  <button type="button" class="btn btn--ghost" data-run="">큐 처리</button>
+  <button type="button" class="btn btn--ghost" data-run="qa">검수만 실행</button>
+  <button type="button" class="btn btn--ghost" data-run="producer">집필만 실행</button>
+  <button type="button" class="btn btn--ghost" data-build>사이트 다시 굽기</button>
+  <button type="button" class="btn btn--ghost" data-reload>새로고침</button>
+  <span class="actionbar__status" id="jobstatus">${esc(job(opts))}</span>
+</section>`
+    : ''
+}
+
+${
+  d.errors && d.errors.length
+    ? `<section class="alarm">
+  <strong>조회 실패</strong> — 아래 값은 실제 상태가 아니다. 0으로 보이는 것은 "없음"이 아니라 "모름"이다.
+  <ul>${d.errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>
+</section>`
+    : ''
+}
 
 <section class="tiles">
   ${tiles
@@ -800,12 +922,7 @@ ${usageSection(d)}
       <div class="panel__body panel__body--flush">
         ${
           d.drafts.length
-            ? `<ul class="list">${d.drafts
-                .map(
-                  (p) => `<li><span class="list__main"><span class="list__title">${esc(p.title)}</span>
-          <span class="list__meta">${esc(p.slug)} · ${esc(p.bytes)}B</span></span>${chip('pending')}</li>`
-                )
-                .join('')}</ul>`
+            ? `<ul class="list">${d.drafts.map((p) => draftItem(p, live)).join('')}</ul>`
             : '<p class="empty">초안 없음. 검수를 통과해야 발행된다.</p>'
         }
       </div>
@@ -852,7 +969,7 @@ ${usageSection(d)}
   </div>
 </div>
 
-<section>
+<section${live ? ' hidden' : ''}>
   <h2 style="margin-bottom:9px">운영 명령</h2>
   <p class="note" style="margin:0 0 10px">
     이 페이지는 스냅샷이라 여기서 직접 실행하지 않는다. 명령을 복사해 저장소 폴더에서 실행한다.
@@ -879,6 +996,79 @@ ${usageSection(d)}
 </footer>
 
 </div>
+${
+  live
+    ? `<script>
+(function () {
+  var K = ${JSON.stringify(K)};
+  function toast(msg, bad) {
+    var el = document.createElement('div');
+    el.className = 'toast' + (bad ? ' toast--bad' : '');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function () { el.remove(); }, bad ? 6000 : 2600);
+  }
+  function post(path, payload, btn) {
+    if (btn) btn.disabled = true;
+    return fetch(path + '?k=' + K, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {})
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (o) {
+        if (!o.ok) { toast(o.j.error || '실패', true); if (btn) btn.disabled = false; return null; }
+        toast(o.j.message || '완료');
+        return o.j;
+      })
+      .catch(function (e) { toast('요청 실패: ' + e.message, true); if (btn) btn.disabled = false; return null; });
+  }
+  function reload() { setTimeout(function () { location.reload(); }, 700); }
+
+  document.addEventListener('click', function (ev) {
+    var b = ev.target.closest('button');
+    if (!b) return;
+
+    if (b.hasAttribute('data-reload')) return location.reload();
+    if (b.hasAttribute('data-build')) return post('/build', {}, b).then(function (r) { if (r) reload(); });
+    if (b.hasAttribute('data-run')) {
+      return post('/run', { role: b.getAttribute('data-run') || null }, b).then(function (r) {
+        b.disabled = false;
+        if (r) poll();
+      });
+    }
+
+    var act = b.getAttribute('data-act');
+    if (act === 'approve') {
+      if (!confirm('이 초안을 발행한다. 되돌리려면 파일을 직접 옮겨야 한다. 계속할까?')) return;
+      return post('/approve', { slug: b.getAttribute('data-slug') }, b).then(function (r) { if (r) reload(); });
+    }
+    if (act === 'reject') {
+      var box = b.parentNode.querySelector('.act__why');
+      var why = (box && box.value || '').trim();
+      if (!why) { toast('반려 사유를 적어라. 사유가 없으면 producer 가 고칠 수 없다.', true); if (box) box.focus(); return; }
+      return post('/reject', { slug: b.getAttribute('data-slug'), why: why }, b).then(function (r) { if (r) reload(); });
+    }
+  });
+
+  var timer = null;
+  function poll() {
+    clearInterval(timer);
+    timer = setInterval(function () {
+      fetch('/job?k=' + K).then(function (r) { return r.json(); }).then(function (j) {
+        var el = document.getElementById('jobstatus');
+        if (!el) return;
+        if (j.running) { el.textContent = j.running + ' 실행 중…'; return; }
+        clearInterval(timer);
+        el.textContent = j.last ? ('마지막: ' + j.last.name + ' ' + (j.last.ok ? '완료' : '실패 — ' + j.last.detail)) : '대기 중';
+        reload();
+      }).catch(function () { clearInterval(timer); });
+    }, 3000);
+  }
+  if (document.getElementById('jobstatus') && /실행 중/.test(document.getElementById('jobstatus').textContent)) poll();
+})();
+<\/script>`
+    : ''
+}
 <script>
 (function () {
   var buttons = document.querySelectorAll('.filters button');

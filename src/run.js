@@ -4,6 +4,7 @@
 //   node src/run.js worker qa       # 그 역할의 작업만 처리 (단계별 검증용)
 //   node src/run.js build           # site/posts/*.md 를 실제 HTML로 굽는다
 //   node src/run.js dashboard       # 관제 화면(dashboard.html) 생성
+//   node src/run.js serve           # 관제 화면을 띄우고 브라우저에서 검수까지 한다
 //   node src/run.js drafts          # 검수 대기 초안 목록
 //   node src/run.js review <slug>   # 초안 전문 읽기
 //   node src/run.js approve <slug>  # 사람이 직접 통과 → 발행
@@ -17,6 +18,7 @@ import { claimTasks, finishTask, enqueue, log, revenueSummary, recall, update } 
 import { toolImpl, setCurrentTask } from './tools.js';
 import { build } from './site.js';
 import { dashboard } from './dashboard.js';
+import { serve } from './serve.js';
 
 const BATCH = Number(process.env.BATCH_SIZE || 3);
 
@@ -164,7 +166,7 @@ async function rebuildSite() {
   }
 }
 
-async function worker(roleFilter) {
+export async function worker(roleFilter) {
   // 역할을 주면 그 역할의 작업만 집는다. 특정 단계만 검증할 때 쓴다.
   const tasks = await claimTasks(roleFilter || null, BATCH);
   if (!tasks.length) {
@@ -285,6 +287,7 @@ const main = {
   reset,
   build: () => build(),
   dashboard: () => dashboard(),
+  serve: () => serve().then(() => new Promise(() => {})), // Ctrl+C 까지 살아 있는다
   drafts,
   review: () => review(arg),
   approve: () => approve(arg),
@@ -296,7 +299,7 @@ const main = {
 }[cmd || 'worker'];
 
 if (!main) {
-  console.error('사용법: node src/run.js [worker [role]|kick <role>|build|dashboard|drafts|review <slug>|approve <slug>|reject <slug> <사유>|health|doctor|reset|seed]');
+  console.error('사용법: node src/run.js [worker [role]|kick <role>|serve|build|dashboard|drafts|review <slug>|approve <slug>|reject <slug> <사유>|health|doctor|reset|seed]');
   process.exit(1);
 }
 
