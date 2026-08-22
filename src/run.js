@@ -68,7 +68,7 @@ async function handleTask(task) {
     }
     await finishTask(task.id, {
       status: ok ? 'done' : 'pending',
-      result: { output: r.output, steps: r.steps, tokens: r.tokens, missing },
+      result: { output: r.output, steps: r.steps, tokens: r.tokens, byModel: r.byModel, missing },
     });
   } catch (e) {
     await log(task.role, 'error', `작업 ${task.id} 실패: ${e.message}`);

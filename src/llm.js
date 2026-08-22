@@ -53,6 +53,22 @@ function parseReset(v) {
   return ms > 0 ? ms : null;
 }
 
+/** 응답 헤더에 실린 실제 잔량. 관제 화면의 게이지는 이 값으로 그린다. */
+function readQuota(res) {
+  const n = (h) => {
+    const v = res.headers.get(h);
+    return v == null ? null : Number(v);
+  };
+  return {
+    tokensRemaining: n('x-ratelimit-remaining-tokens'),
+    tokensLimit: n('x-ratelimit-limit-tokens'),
+    requestsRemaining: n('x-ratelimit-remaining-requests'),
+    requestsLimit: n('x-ratelimit-limit-requests'),
+    resetTokens: res.headers.get('x-ratelimit-reset-tokens'),
+    resetRequests: res.headers.get('x-ratelimit-reset-requests'),
+  };
+}
+
 function readLimits(name, res) {
   const remaining = res.headers.get('x-ratelimit-remaining-tokens');
   const total = res.headers.get('x-ratelimit-limit-tokens');
@@ -211,12 +227,21 @@ export async function probeProvider(name) {
       headers: { 'Content-Type': 'application/json', ...authHeaders(p) },
       body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
     });
-    if (res.ok) return { state: 'ok', detail: `${model} · 모델 ${ids.length}개`, model };
+    const quota = readQuota(res);
+    if (res.ok) return { state: 'ok', detail: `${model} · 모델 ${ids.length}개`, model, quota };
     const text = (await res.text()).replace(/\s+/g, ' ');
     if (res.status === 429 && /per day|\bTPD\b/i.test(text)) {
-      return { state: 'limited', detail: `${model} 일일 한도 소진`, model };
+      // 429 본문에만 하루치 사용량이 들어 있다. 헤더로는 알 수 없다.
+      const used = /Used (\d+)/.exec(text);
+      const cap = /Limit (\d+)/.exec(text);
+      return {
+        state: 'limited',
+        detail: `${model} 일일 한도 소진`,
+        model,
+        quota: { ...quota, dayUsed: used ? Number(used[1]) : null, dayLimit: cap ? Number(cap[1]) : null },
+      };
     }
-    if (res.status === 429) return { state: 'limited', detail: `${model} 분당 한도`, model };
+    if (res.status === 429) return { state: 'limited', detail: `${model} 분당 한도`, model, quota };
     if (res.status === 402) return { state: 'down', detail: '결제 필요 — 무료 쿼터 없음', model };
     return { state: 'down', detail: `${res.status} ${text.slice(0, 50)}`, model };
   } catch (e) {

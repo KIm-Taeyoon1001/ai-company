@@ -72,6 +72,8 @@ export async function runAgent({ role, system, task, tools, maxSteps, handoff = 
   const trace = [];
   let usedTokens = 0;
   let handedOff = false;
+  // 어느 제공자·모델이 얼마나 먹었는지. 나중에 모델별 소모를 볼 수 있어야 한다.
+  const byModel = {};
 
   for (let step = 0; step < budget; step++) {
     const left = budget - step;
@@ -89,14 +91,17 @@ export async function runAgent({ role, system, task, tools, maxSteps, handoff = 
     }
 
     compact(messages, specs);
-    const { message, provider, usage } = await chat({ messages, tools: specs });
-    usedTokens += usage?.total_tokens || 0;
+    const { message, provider, model, usage } = await chat({ messages, tools: specs });
+    const spent = usage?.total_tokens || 0;
+    usedTokens += spent;
+    const key = `${provider}/${model}`;
+    byModel[key] = (byModel[key] || 0) + spent;
     messages.push(message);
 
     const calls = message.tool_calls || [];
     if (!calls.length) {
       await log(role, 'info', `완료 (${step + 1}/${budget}스텝, ${provider}, ~${usedTokens}토큰, 인계=${handedOff})`);
-      return { output: message.content || '', trace, steps: step + 1, tokens: usedTokens, handedOff };
+      return { output: message.content || '', trace, steps: step + 1, tokens: usedTokens, byModel, handedOff };
     }
 
     for (const call of calls) {
@@ -135,6 +140,7 @@ export async function runAgent({ role, system, task, tools, maxSteps, handoff = 
     trace,
     steps: budget,
     tokens: usedTokens,
+    byModel,
     handedOff,
     truncated: !handedOff, // 인계까지 했으면 실패로 치지 않는다
   };

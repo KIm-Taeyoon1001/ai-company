@@ -177,6 +177,201 @@ function relay(tasks) {
   }).join('');
 }
 
+// ---------- 사용량 ----------
+
+const HOURS = 24;
+
+/** 시간대별 토큰 소모. 기록이 있는 작업만 센다. */
+function usageSeries(tasks) {
+  const now = Date.now();
+  const buckets = Array.from({ length: HOURS }, (_, i) => ({
+    at: new Date(now - (HOURS - 1 - i) * 3600_000),
+    tokens: 0,
+    tasks: 0,
+  }));
+  for (const t of tasks) {
+    const tok = t.result?.tokens;
+    if (!tok) continue;
+    const when = new Date(t.updated_at || t.created_at).getTime();
+    const idx = HOURS - 1 - Math.floor((now - when) / 3600_000);
+    if (idx >= 0 && idx < HOURS) {
+      buckets[idx].tokens += tok;
+      buckets[idx].tasks += 1;
+    }
+  }
+  return buckets;
+}
+
+function fmt(n) {
+  return Number(n || 0).toLocaleString('ko-KR');
+}
+
+function compact(n) {
+  const v = Number(n || 0);
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M';
+  if (v >= 1000) return Math.round(v / 1000) + 'K';
+  return String(v);
+}
+
+/** 면적 차트. 라이브러리 없이 SVG 로 직접 그린다. */
+function areaChart(buckets) {
+  const W = 1000;
+  const H = 150;
+  const padT = 12;
+  const padB = 20;
+  const max = Math.max(1, ...buckets.map((b) => b.tokens));
+  const step = W / Math.max(1, buckets.length - 1);
+  const y = (v) => padT + (H - padT - padB) * (1 - v / max);
+  const pts = buckets.map((b, i) => [i * step, y(b.tokens)]);
+  const line = pts.map(([x, yy], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${yy.toFixed(1)}`).join(' ');
+  const area = `${line} L${W},${H - padB} L0,${H - padB} Z`;
+  const grid = [0.25, 0.5, 0.75, 1]
+    .map((f) => `<line x1="0" y1="${y(max * f).toFixed(1)}" x2="${W}" y2="${y(max * f).toFixed(1)}" class="grid"/>`)
+    .join('');
+  const labels = buckets
+    .map((b, i) =>
+      i % 6 === 0
+        ? `<text x="${(i * step).toFixed(1)}" y="${H - 5}" class="xlab" text-anchor="${i === 0 ? 'start' : 'middle'}">${String(
+            b.at.getHours()
+          ).padStart(2, '0')}시</text>`
+        : ''
+    )
+    .join('');
+  const last = pts[pts.length - 1];
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+    aria-label="최근 24시간 시간대별 토큰 소모">
+    <defs><linearGradient id="fadeArea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity=".28"/>
+      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid}
+    <path d="${area}" fill="url(#fadeArea)"/>
+    <path d="${line}" class="spark"/>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3.5" class="tip"/>
+    <text x="4" y="${(padT + 2).toFixed(1)}" class="ylab">${esc(compact(max))}</text>
+    ${labels}
+  </svg>`;
+}
+
+/** 링 게이지. 남은 비율을 호로 그린다. */
+function ring(label, used, limit, note) {
+  const R = 30;
+  const C = 2 * Math.PI * R;
+  const ratio = limit ? Math.min(1, Math.max(0, used / limit)) : 0;
+  const tone = ratio >= 0.9 ? 'crit' : ratio >= 0.6 ? 'warn' : 'ok';
+  return `<div class="ring">
+    <svg viewBox="0 0 76 76" aria-label="${esc(label)} ${Math.round(ratio * 100)} 퍼센트">
+      <circle cx="38" cy="38" r="${R}" class="ring__track"/>
+      <circle cx="38" cy="38" r="${R}" class="ring__bar ring__bar--${tone}"
+        stroke-dasharray="${(C * ratio).toFixed(1)} ${(C * (1 - ratio)).toFixed(1)}"
+        transform="rotate(-90 38 38)"/>
+      <text x="38" y="42" class="ring__pct">${limit ? Math.round(ratio * 100) + '%' : '—'}</text>
+    </svg>
+    <span class="ring__label">${esc(label)}</span>
+    <span class="ring__note">${esc(note)}</span>
+  </div>`;
+}
+
+function usageSection(d) {
+  const buckets = usageSeries(d.tasks);
+  const scored = d.tasks.filter((t) => t.result?.tokens);
+  const total = scored.reduce((s, t) => s + t.result.tokens, 0);
+  const lastHour = buckets[buckets.length - 1].tokens;
+  const peak = Math.max(0, ...buckets.map((b) => b.tokens));
+  const avg = scored.length ? Math.round(total / scored.length) : 0;
+
+  const byRole = {};
+  for (const t of scored) byRole[t.role] = (byRole[t.role] || 0) + t.result.tokens;
+  const roleRows = Object.entries(byRole).sort((a, b) => b[1] - a[1]);
+  const roleMax = Math.max(1, ...roleRows.map((r) => r[1]));
+
+  const byModel = {};
+  for (const t of scored) for (const [k, v] of Object.entries(t.result.byModel || {})) byModel[k] = (byModel[k] || 0) + v;
+
+  const groq = d.providers.find((p) => p.name === 'groq');
+  const q = groq?.quota || {};
+  const rings = [
+    q.tokensLimit
+      ? ring('분당 토큰', q.tokensLimit - (q.tokensRemaining ?? q.tokensLimit), q.tokensLimit,
+          `잔량 ${fmt(q.tokensRemaining)} / ${fmt(q.tokensLimit)}`)
+      : ring('분당 토큰', 0, 0, '헤더 없음'),
+    q.requestsLimit
+      ? ring('일일 요청', q.requestsLimit - (q.requestsRemaining ?? q.requestsLimit), q.requestsLimit,
+          `잔량 ${fmt(q.requestsRemaining)} / ${fmt(q.requestsLimit)}`)
+      : ring('일일 요청', 0, 0, '헤더 없음'),
+    // 일일 한도는 모델마다 따로 걸린다. 어느 모델이 얼마를 먹었는지 모르면 비율을 낼 수 없다 —
+    // 합계를 한 모델 한도와 비교하면 100% 처럼 보이는 거짓말이 된다.
+    Object.keys(byModel).length
+      ? ring(
+          '일일 토큰',
+          total,
+          200000 * Object.keys(byModel).length,
+          `기록 ${compact(total)} / 모델 ${Object.keys(byModel).length}개×200K`
+        )
+      : ring('일일 토큰', 0, 0, `기록 ${compact(total)} · 모델별 기록 없음`),
+  ].join('');
+
+  return `<section class="usage">
+  <div class="usage__head">
+    <div>
+      <h2>API 소모</h2>
+      <div class="usage__hero">
+        <span class="usage__big">${esc(compact(lastHour))}</span><span class="usage__unit">토큰 / 최근 1시간</span>
+      </div>
+      <div class="usage__subs">
+        <span><em>24시간 누적</em>${esc(fmt(total))}</span>
+        <span><em>작업당 평균</em>${esc(fmt(avg))}</span>
+        <span><em>시간당 최대</em>${esc(fmt(peak))}</span>
+        <span><em>기록된 작업</em>${esc(scored.length)}건</span>
+      </div>
+    </div>
+    <div class="rings">${rings}</div>
+  </div>
+
+  <div class="usage__chart">${areaChart(buckets)}</div>
+
+  <div class="usage__foot">
+    <div class="bars">
+      <h3>역할별 소모</h3>
+      ${roleRows
+        .map(
+          ([role, v]) => `<div class="bar">
+        <span class="bar__k">${esc(ROLE_LABEL[role] || role)}</span>
+        <span class="bar__track"><span class="bar__fill" style="width:${((v / roleMax) * 100).toFixed(1)}%"></span></span>
+        <span class="bar__v">${esc(fmt(v))}</span>
+      </div>`
+        )
+        .join('')}
+    </div>
+    <div class="bars">
+      <h3>모델별 소모</h3>
+      ${
+        Object.keys(byModel).length
+          ? Object.entries(byModel)
+              .sort((a, b) => b[1] - a[1])
+              .map(
+                ([m, v]) => `<div class="bar">
+        <span class="bar__k mono">${esc(m.split('/').slice(-1)[0])}</span>
+        <span class="bar__track"><span class="bar__fill" style="width:${(
+          (v / Math.max(...Object.values(byModel))) * 100
+        ).toFixed(1)}%"></span></span>
+        <span class="bar__v">${esc(fmt(v))}</span>
+      </div>`
+              )
+              .join('')
+          : '<p class="note" style="margin:0">아직 기록 없음. 이번 변경 이후 실행되는 작업부터 모델별로 쌓인다.</p>'
+      }
+    </div>
+  </div>
+
+  <p class="note usage__caveat">
+    우리가 기록한 값이다 — 실패해서 결과를 못 남긴 시도의 토큰은 빠져 있으므로 실제 소모는 이보다 크다.
+    Groq 는 사용량 조회 API를 제공하지 않는다. 분당 토큰·일일 요청 게이지만 응답 헤더에서 읽은 실제 잔량이고,
+    일일 토큰은 한도에 부딪히기 전까지 조회되지 않아 기록 기준 추정이다.
+  </p>
+</section>`;
+}
+
 function render(d) {
   const now = new Date();
   const stamp = now.toISOString().slice(0, 16).replace('T', ' ');
@@ -413,6 +608,53 @@ td.title { max-width: 380px; }
 .copy:hover { background: var(--accent); color: var(--surface); }
 .copy[data-done="1"] { background: var(--ok); border-color: var(--ok); color: var(--surface); }
 
+/* ── API 소모 ── */
+.usage { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: var(--shadow); overflow: hidden; }
+.usage__head { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start;
+  justify-content: space-between; padding: 15px 18px 6px; }
+.usage__hero { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+.usage__big { font-family: Archivo, sans-serif; font-size: 3rem; font-weight: 700; line-height: 1;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.usage__unit { font-size: .82rem; color: var(--muted); }
+.usage__subs { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 10px; font-size: .82rem;
+  font-variant-numeric: tabular-nums; }
+.usage__subs span { display: flex; flex-direction: column; }
+.usage__subs em { font-style: normal; font-size: .7rem; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--muted); }
+
+.rings { display: flex; gap: 18px; }
+.ring { display: flex; flex-direction: column; align-items: center; width: 92px; text-align: center; }
+.ring svg { width: 68px; height: 68px; }
+.ring__track { fill: none; stroke: var(--line); stroke-width: 7; }
+.ring__bar { fill: none; stroke-width: 7; stroke-linecap: butt; }
+.ring__bar--ok { stroke: var(--accent); }
+.ring__bar--warn { stroke: var(--warn); }
+.ring__bar--crit { stroke: var(--crit); }
+.ring__pct { font-family: "IBM Plex Mono", monospace; font-size: 15px; font-weight: 500;
+  fill: var(--ink); text-anchor: middle; font-variant-numeric: tabular-nums; }
+.ring__label { font-size: .74rem; margin-top: 3px; }
+.ring__note { font-size: .68rem; color: var(--muted); line-height: 1.3; }
+
+.usage__chart { padding: 0 4px; }
+.chart { display: block; width: 100%; height: 150px; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .spark { fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.chart .tip { fill: var(--accent); }
+.chart .xlab, .chart .ylab { font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: var(--muted); }
+
+.usage__foot { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px;
+  padding: 12px 18px 4px; border-top: 1px solid var(--line); }
+.bars h3 { font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
+  font-weight: 600; margin-bottom: 7px; }
+.bar { display: grid; grid-template-columns: 62px 1fr 62px; gap: 9px; align-items: center;
+  font-size: .78rem; margin-bottom: 5px; }
+.bar__k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar__track { height: 7px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+.bar__fill { display: block; height: 100%; background: var(--accent); }
+.bar__v { text-align: right; font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+.usage__caveat { padding: 8px 18px 14px; margin: 0; }
+
 a { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 footer { color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); padding-top: 14px; }
@@ -450,6 +692,8 @@ footer { color: var(--muted); font-size: .78rem; border-top: 1px solid var(--lin
   <h2 style="margin-bottom:9px">단계별 적체</h2>
   <div class="relay">${relay(d.tasks)}</div>
 </section>
+
+${usageSection(d)}
 
 <div class="cols">
   <div class="stack">
