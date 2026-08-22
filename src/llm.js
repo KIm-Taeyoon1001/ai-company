@@ -50,12 +50,24 @@ function authHeaders(p) {
 // 채팅용이 아닌 것들 — 이름에 이게 있으면 후보에서 뺀다
 const NOT_CHAT = /whisper|tts|embed|embedding|guard|moderat|rerank|image|vision-only|audio|transcribe|orpheus|playai|speech|sora|veo|imagen|dall|canopylabs|distil/i;
 // 선호 순서 (위에 있을수록 우선)
+// 위에서부터 순서대로 찾는다. 같은 규칙 안에서는 파라미터가 큰 쪽을 우선.
 const PREFER = [
-  /gpt-oss|kimi|deepseek|qwen3|llama-4|llama-3\.[13]/i,
+  /gpt-oss-120b/i,
+  /gpt-oss/i,
+  /llama-4|llama-3\.[13]/i,
   /compound(?!-mini)/i,
-  /gemini.*(flash|pro)/i,
-  /llama|qwen|mistral|gemma|allam|compound/i,
+  /gemini-.*pro/i,
+  /gemini-.*flash/i,
+  /kimi|deepseek/i,
+  /qwen/i,
+  /llama|mistral|gemma|allam|compound/i,
 ];
+
+/** "...-120b" 같은 파라미터 표기를 숫자로 뽑는다. 없으면 0. */
+function sizeOf(id) {
+  const m = /(\d+(?:\.\d+)?)\s*b\b/i.exec(id);
+  return m ? parseFloat(m[1]) : 0;
+}
 
 export async function listModels(providerName) {
   const p = PROVIDERS.find((x) => x.name === providerName);
@@ -71,12 +83,12 @@ export async function listModels(providerName) {
   return (json.data || []).map((m) => m.id).filter(Boolean);
 }
 
-function pickModel(ids) {
+export function pickModel(ids) {
   const usable = ids.filter((id) => !NOT_CHAT.test(id));
   if (!usable.length) return null;
   for (const rule of PREFER) {
     const hit = usable.filter((id) => rule.test(id));
-    if (hit.length) return hit.sort((a, b) => a.length - b.length)[0];
+    if (hit.length) return hit.sort((a, b) => sizeOf(b) - sizeOf(a))[0];
   }
   return usable[0];
 }
@@ -160,6 +172,9 @@ export async function chat({ messages, tools, temperature = 0.4, forceProvider, 
         const json = await res.json();
         const choice = json.choices?.[0];
         if (!choice) throw new Error(`${p.name}: 빈 응답`);
+        if (typeof choice.message?.content === 'string') {
+          choice.message.content = stripThinking(choice.message.content);
+        }
         return {
           message: choice.message,
           provider: p.name,
@@ -204,6 +219,14 @@ export async function chatJSON({ system, user, schemaHint, temperature = 0.2 }) 
   const parsed2 = tryParse(fix.message.content);
   if (parsed2 !== undefined) return parsed2;
   throw new Error(`JSON 파싱 실패: ${String(fix.message.content).slice(0, 200)}`);
+}
+
+/** 추론 모델의 <think>…</think> / <reasoning>…</reasoning> 흔적을 걷어낸다. */
+export function stripThinking(text) {
+  return String(text)
+    .replace(/<(think|thinking|reasoning)>[\s\S]*?<\/\1>/gi, '')
+    .replace(/^[\s\S]*?<\/(?:think|thinking|reasoning)>/i, '')
+    .trim();
 }
 
 function tryParse(text) {
