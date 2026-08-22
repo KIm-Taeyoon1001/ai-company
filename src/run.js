@@ -3,6 +3,7 @@
 //   node src/run.js worker          # 큐에 쌓인 작업 처리 (30분마다)
 //   node src/run.js worker qa       # 그 역할의 작업만 처리 (단계별 검증용)
 //   node src/run.js build           # site/posts/*.md 를 실제 HTML로 굽는다
+//   node src/run.js dashboard       # 관제 화면(dashboard.html) 생성
 //   node src/run.js kick research   # 특정 역할을 직접 깨움 (하루 1회 등)
 
 import { ROLES } from './roles/index.js';
@@ -11,6 +12,7 @@ import { runAgent } from './agent.js';
 import { claimTasks, finishTask, enqueue, log, revenueSummary, recall, update } from './db.js';
 import { toolImpl, setCurrentTask } from './tools.js';
 import { build } from './site.js';
+import { dashboard } from './dashboard.js';
 
 const BATCH = Number(process.env.BATCH_SIZE || 3);
 
@@ -205,6 +207,7 @@ const main = {
   doctor,
   reset,
   build: () => build(),
+  dashboard: () => dashboard(),
   seed: async () => {
     await enqueue({ role: 'ceo', title: '회사 최초 전략 수립', priority: 1 });
     console.log('초기 작업 등록 완료');
@@ -212,7 +215,7 @@ const main = {
 }[cmd || 'worker'];
 
 if (!main) {
-  console.error('사용법: node src/run.js [worker [role]|kick <role>|build|health|doctor|reset|seed]');
+  console.error('사용법: node src/run.js [worker [role]|kick <role>|build|dashboard|health|doctor|reset|seed]');
   process.exit(1);
 }
 

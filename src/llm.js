@@ -186,6 +186,44 @@ export async function listModels(providerName) {
   return (json.data || []).map((m) => m.id).filter(Boolean);
 }
 
+/**
+ * 이 제공자가 정말로 대화가 되는지 확인한다. /models 가 된다고 대화가 되는 건 아니다 —
+ * Cerebras 는 모델 목록은 주면서 대화는 402(결제 필요)를 낸다. 관제 화면이 그걸 "정상"으로
+ * 보여주면 안 된다. 토큰 1개짜리 요청이라 비용은 사실상 없다.
+ */
+export async function probeProvider(name) {
+  const p = PROVIDERS.find((x) => x.name === name);
+  if (!p) return { state: 'off', detail: '알 수 없는 제공자' };
+  if (!p.key()) return { state: 'off', detail: '키 없음' };
+
+  let ids;
+  try {
+    ids = await listModels(name);
+  } catch (e) {
+    return { state: 'down', detail: e.message.replace(/\s+/g, ' ').slice(0, 70) };
+  }
+  const model = p.model() || pickModel(ids);
+  if (!model) return { state: 'down', detail: `모델 ${ids.length}개, 쓸 만한 채팅 모델 없음` };
+
+  try {
+    const res = await fetch(`${p.base}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(p) },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+    });
+    if (res.ok) return { state: 'ok', detail: `${model} · 모델 ${ids.length}개`, model };
+    const text = (await res.text()).replace(/\s+/g, ' ');
+    if (res.status === 429 && /per day|\bTPD\b/i.test(text)) {
+      return { state: 'limited', detail: `${model} 일일 한도 소진`, model };
+    }
+    if (res.status === 429) return { state: 'limited', detail: `${model} 분당 한도`, model };
+    if (res.status === 402) return { state: 'down', detail: '결제 필요 — 무료 쿼터 없음', model };
+    return { state: 'down', detail: `${res.status} ${text.slice(0, 50)}`, model };
+  } catch (e) {
+    return { state: 'down', detail: e.message.slice(0, 60), model };
+  }
+}
+
 export function pickModel(ids) {
   const usable = ids.filter((id) => !NOT_CHAT.test(id) && !bannedModels.has(id));
   if (!usable.length) return null;

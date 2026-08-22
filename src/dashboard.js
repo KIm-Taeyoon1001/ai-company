@@ -1,0 +1,696 @@
+// dashboard.js — 파이프라인 관제 화면을 정적 HTML로 굽는다.
+//
+//   node --env-file=.env src/run.js dashboard
+//
+// 브라우저에서 Supabase를 직접 조회하지 않는다. 그러려면 service_role 키를 페이지에
+// 심어야 하는데, 그 키는 RLS를 통째로 우회한다 — 페이지를 여는 사람 누구나 DB 전체
+// 권한을 갖게 된다. 그래서 Node가 읽어서 스냅샷을 굽는다. 최신 상태가 필요하면 다시 굽는다.
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { select, recall, revenueSummary } from './db.js';
+import { probeProvider } from './llm.js';
+
+const ROOT = process.cwd();
+const ROLE_ORDER = ['ceo', 'research', 'producer', 'qa', 'publisher'];
+const ROLE_LABEL = {
+  ceo: '전략',
+  research: '조사',
+  producer: '집필',
+  qa: '검수',
+  publisher: '배포',
+  cfo: '결산',
+};
+
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function ago(iso) {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return '—';
+  const m = Math.round(ms / 60000);
+  if (m < 1) return '방금';
+  if (m < 60) return `${m}분 전`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}시간 전`;
+  return `${Math.round(h / 24)}일 전`;
+}
+
+// ---------- 수집 ----------
+
+async function repoSlug() {
+  try {
+    const cfg = await fs.readFile(path.join(ROOT, '.git', 'config'), 'utf8');
+    const m = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\s*$/m.exec(cfg);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+async function ciRuns(slug) {
+  if (!slug) return { runs: [], note: 'origin 원격이 GitHub가 아니다' };
+  try {
+    const res = await fetch(`https://api.github.com/repos/${slug}/actions/runs?per_page=6`, {
+      headers: { 'User-Agent': 'ai-company-dashboard' },
+    });
+    if (!res.ok) return { runs: [], note: `GitHub ${res.status}` };
+    const j = await res.json();
+    return {
+      runs: (j.workflow_runs || []).map((r) => ({
+        id: r.id,
+        name: r.name,
+        status: r.status,
+        conclusion: r.conclusion,
+        event: r.event,
+        at: r.run_started_at || r.created_at,
+        seconds: Math.max(0, Math.round((new Date(r.updated_at) - new Date(r.run_started_at)) / 1000)),
+        url: r.html_url,
+      })),
+      note: null,
+    };
+  } catch (e) {
+    return { runs: [], note: `조회 실패: ${e.message}` };
+  }
+}
+
+/** 실제로 대화가 되는지까지 본다. 1토큰 요청이라 비용은 사실상 없다. */
+async function providerHealth() {
+  const names = ['groq', 'cerebras', 'gemini', 'openrouter'];
+  const out = [];
+  for (const name of names) {
+    const r = await probeProvider(name).catch((e) => ({ state: 'down', detail: e.message.slice(0, 60) }));
+    out.push({ name, ...r });
+  }
+  return out;
+}
+
+async function listMd(dir) {
+  try {
+    const names = (await fs.readdir(path.join(ROOT, dir))).filter((n) => n.endsWith('.md'));
+    const out = [];
+    for (const n of names) {
+      if (dir === 'drafts' && n === 'README.md') continue;
+      const raw = await fs.readFile(path.join(ROOT, dir, n), 'utf8');
+      const title = /^title:\s*(.+)$/m.exec(raw)?.[1]?.trim() || n.replace(/\.md$/, '');
+      const date = /^date:\s*(.+)$/m.exec(raw)?.[1]?.trim() || '';
+      out.push({ slug: n.replace(/\.md$/, ''), title, date, bytes: Buffer.byteLength(raw) });
+    }
+    return out.sort((a, b) => (b.date > a.date ? 1 : -1));
+  } catch {
+    return [];
+  }
+}
+
+async function gather() {
+  const [tasks, logs, strategy, revenue, published, drafts, providers] = await Promise.all([
+    select('tasks', 'select=id,role,title,status,attempts,priority,payload,result,created_at,updated_at&order=id.desc&limit=80').catch(() => []),
+    select('logs', 'select=ts,role,level,msg&order=ts.desc&limit=60').catch(() => []),
+    recall('strategy').catch(() => null),
+    revenueSummary(30).catch(() => ({ total: 0, count: 0, bySource: {} })),
+    listMd('site/posts'),
+    listMd('drafts'),
+    providerHealth(),
+  ]);
+  const slug = await repoSlug();
+  const ci = await ciRuns(slug);
+  return { tasks, logs, strategy, revenue, published, drafts, providers, ci, slug };
+}
+
+// ---------- 표현 ----------
+
+const STATE = {
+  pending: { label: '대기', tone: 'wait' },
+  running: { label: '실행중', tone: 'live' },
+  done: { label: '완료', tone: 'ok' },
+  failed: { label: '실패', tone: 'crit' },
+  cancelled: { label: '취소', tone: 'off' },
+};
+
+function chip(status) {
+  const s = STATE[status] || { label: status, tone: 'off' };
+  return `<span class="chip chip--${s.tone}">${esc(s.label)}</span>`;
+}
+
+const PROVIDER_STATE = {
+  ok: { label: '사용 가능', tone: 'ok' },
+  limited: { label: '한도 소진', tone: 'wait' },
+  down: { label: '불가', tone: 'crit' },
+  off: { label: '미설정', tone: 'off' },
+};
+
+function providerChip(state) {
+  const s = PROVIDER_STATE[state] || PROVIDER_STATE.off;
+  return `<span class="chip chip--${s.tone}">${esc(s.label)}</span>`;
+}
+
+function cmd(label, command, note) {
+  return `<div class="cmd">
+      <div class="cmd__text">
+        <span class="cmd__label">${esc(label)}</span>
+        ${note ? `<span class="cmd__note">${esc(note)}</span>` : ''}
+      </div>
+      <code class="cmd__code">${esc(command)}</code>
+      <button class="copy" type="button" data-copy="${esc(command)}" aria-label="${esc(label)} 명령 복사">복사</button>
+    </div>`;
+}
+
+function relay(tasks) {
+  return ROLE_ORDER.map((role, i) => {
+    const mine = tasks.filter((t) => t.role === role);
+    const waiting = mine.filter((t) => t.status === 'pending').length;
+    const failed = mine.filter((t) => t.status === 'failed').length;
+    const done = mine.filter((t) => t.status === 'done').length;
+    const tone = failed ? 'crit' : waiting ? 'wait' : 'idle';
+    return `${i ? '<div class="relay__link" aria-hidden="true"></div>' : ''}
+      <div class="relay__stage relay__stage--${tone}">
+        <span class="relay__role">${esc(ROLE_LABEL[role])}</span>
+        <span class="relay__count">${waiting}</span>
+        <span class="relay__meta">대기 · 완료 ${done}${failed ? ` · 실패 ${failed}` : ''}</span>
+      </div>`;
+  }).join('');
+}
+
+function render(d) {
+  const now = new Date();
+  const stamp = now.toISOString().slice(0, 16).replace('T', ' ');
+  const pending = d.tasks.filter((t) => t.status === 'pending');
+  const failed = d.tasks.filter((t) => t.status === 'failed');
+  const running = d.tasks.filter((t) => t.status === 'running');
+  const lastRun = d.ci.runs[0];
+  const liveProviders = d.providers.filter((p) => p.state === 'ok');
+  const limitedProviders = d.providers.filter((p) => p.state === 'limited');
+  const problems = d.logs.filter((l) => l.level === 'error' || l.level === 'warn');
+
+  const tiles = [
+    {
+      k: '발행',
+      v: String(d.published.length),
+      u: '편',
+      note: d.strategy?.metric ? esc(d.strategy.metric).slice(0, 40) : 'site/posts',
+      tone: d.published.length ? 'ok' : 'wait',
+    },
+    { k: '검수 대기 초안', v: String(d.drafts.length), u: '편', note: 'drafts/', tone: d.drafts.length ? 'wait' : 'idle' },
+    { k: '큐 대기', v: String(pending.length), u: '건', note: running.length ? `실행중 ${running.length}건` : '실행중 없음', tone: pending.length ? 'wait' : 'idle' },
+    { k: '실패', v: String(failed.length), u: '건', note: failed.length ? '조치 필요' : '없음', tone: failed.length ? 'crit' : 'idle' },
+    {
+      k: 'LLM 제공자',
+      v: `${liveProviders.length}/${d.providers.length}`,
+      u: '',
+      note:
+        (liveProviders.map((p) => p.name).join(', ') || '사용 가능 없음') +
+        (limitedProviders.length ? ` · 한도 ${limitedProviders.map((p) => p.name).join(', ')}` : ''),
+      tone: liveProviders.length ? 'ok' : limitedProviders.length ? 'wait' : 'crit',
+    },
+    {
+      k: '30일 수익',
+      v: String(d.revenue.total ?? 0),
+      u: '원',
+      note: `기록 ${d.revenue.count ?? 0}건`,
+      tone: 'idle',
+    },
+  ];
+
+  return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ai-company 관제반</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  --ground: #eef1f0;
+  --surface: #ffffff;
+  --surface-2: #f6f8f7;
+  --ink: #101d1b;
+  --muted: #5a6b68;
+  --line: #d4dedb;
+  --line-strong: #b9c7c3;
+  --accent: #0d6b62;
+  --accent-soft: #ddeceA;
+  --ok: #2f7a4f;
+  --warn: #9c6410;
+  --crit: #a53333;
+  --live: #0d6b62;
+  --shadow: 0 1px 2px rgba(16, 29, 27, .07), 0 8px 24px -18px rgba(16, 29, 27, .5);
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0a1211;
+    --surface: #111c1a;
+    --surface-2: #16221f;
+    --ink: #e2ecea;
+    --muted: #8fa3a0;
+    --line: #21322e;
+    --line-strong: #2e433e;
+    --accent: #43b6a8;
+    --accent-soft: #102b28;
+    --ok: #56c087;
+    --warn: #d99a3b;
+    --crit: #e57373;
+    --live: #43b6a8;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -20px rgba(0, 0, 0, .9);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0a1211;
+  --surface: #111c1a;
+  --surface-2: #16221f;
+  --ink: #e2ecea;
+  --muted: #8fa3a0;
+  --line: #21322e;
+  --line-strong: #2e433e;
+  --accent: #43b6a8;
+  --accent-soft: #102b28;
+  --ok: #56c087;
+  --warn: #d99a3b;
+  --crit: #e57373;
+  --live: #43b6a8;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -20px rgba(0, 0, 0, .9);
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", -apple-system, "Malgun Gothic", sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; display: flex; flex-direction: column; gap: 26px; }
+
+h1, h2, h3 { font-family: Archivo, "IBM Plex Sans", sans-serif; margin: 0; text-wrap: balance; }
+h1 { font-size: 1.5rem; letter-spacing: -.01em; }
+h2 {
+  font-size: .74rem; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--muted); font-weight: 600;
+}
+code, .num, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+/* ── 머리 ── */
+.head { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between;
+  padding-bottom: 18px; border-bottom: 2px solid var(--line-strong); }
+.head__id { display: flex; align-items: baseline; gap: 10px; }
+.head__mark { width: 10px; height: 10px; background: var(--accent); border-radius: 2px; transform: translateY(-2px); }
+.head__sub { margin: 4px 0 0; color: var(--muted); font-size: .86rem; }
+.head__stamp { text-align: right; font-size: .78rem; color: var(--muted); }
+.head__stamp .mono { display: block; color: var(--ink); font-size: .95rem; }
+
+/* ── 요약 타일 ── */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 10px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 13px 14px; display: flex; flex-direction: column; gap: 3px; box-shadow: var(--shadow);
+  border-left: 3px solid var(--line-strong); }
+.tile--ok { border-left-color: var(--ok); }
+.tile--wait { border-left-color: var(--warn); }
+.tile--crit { border-left-color: var(--crit); }
+.tile__k { font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.tile__v { font-family: Archivo, sans-serif; font-size: 1.75rem; font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; }
+.tile__v span { font-size: .8rem; font-weight: 600; color: var(--muted); margin-left: 3px; }
+.tile__note { font-size: .76rem; color: var(--muted); overflow-wrap: anywhere; }
+
+/* ── 릴레이 ── */
+.relay { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding-bottom: 4px; }
+.relay__stage { flex: 1 1 0; min-width: 116px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 11px 13px; display: flex; flex-direction: column; gap: 1px; }
+.relay__stage--wait { border-color: var(--warn); background: var(--surface); }
+.relay__stage--crit { border-color: var(--crit); }
+.relay__role { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+.relay__count { font-family: Archivo, sans-serif; font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.relay__stage--wait .relay__count { color: var(--warn); }
+.relay__stage--crit .relay__count { color: var(--crit); }
+.relay__meta { font-size: .72rem; color: var(--muted); }
+.relay__link { flex: 0 0 26px; align-self: center; height: 1px; background: var(--line-strong); position: relative; }
+.relay__link::after { content: ""; position: absolute; right: 0; top: -3px;
+  border-left: 6px solid var(--line-strong); border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; }
+
+/* ── 본문 배치 ── */
+.cols { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+@media (max-width: 880px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.stack { display: flex; flex-direction: column; gap: 22px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+.panel__head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.panel__body { padding: 12px 14px; }
+.panel__body--flush { padding: 0; }
+
+/* ── 칩 ── */
+.chip { display: inline-block; font-size: .7rem; font-weight: 600; letter-spacing: .04em;
+  padding: 2px 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.chip--ok { color: var(--ok); }
+.chip--wait { color: var(--warn); }
+.chip--crit { color: var(--crit); }
+.chip--live { color: var(--live); }
+.chip--off { color: var(--muted); }
+
+/* ── 표 ── */
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: .84rem; }
+th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: .7rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600;
+  position: sticky; top: 0; background: var(--surface-2); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--surface-2); }
+td.id { font-family: "IBM Plex Mono", monospace; color: var(--muted); font-variant-numeric: tabular-nums; }
+td.title { max-width: 380px; }
+.rowmeta { color: var(--muted); font-size: .75rem; }
+
+/* ── 필터 ── */
+.filters { display: flex; gap: 5px; flex-wrap: wrap; }
+.filters button { font: inherit; font-size: .74rem; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: transparent; color: var(--muted); cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+
+/* ── 목록 ── */
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.list li { padding: 9px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px;
+  align-items: baseline; justify-content: space-between; }
+.list li:last-child { border-bottom: 0; }
+.list__main { min-width: 0; }
+.list__title { display: block; font-size: .85rem; overflow-wrap: anywhere; }
+.list__meta { font-size: .73rem; color: var(--muted); }
+.empty { padding: 14px; color: var(--muted); font-size: .82rem; }
+
+/* ── 로그 ── */
+.log { list-style: none; margin: 0; padding: 0; font-family: "IBM Plex Mono", monospace; font-size: .78rem; }
+.log li { padding: 6px 14px; border-bottom: 1px solid var(--line); display: grid;
+  grid-template-columns: 62px 74px 1fr; gap: 10px; align-items: baseline; }
+.log li:last-child { border-bottom: 0; }
+.log__t { color: var(--muted); }
+.log__lv { font-weight: 500; }
+.log__lv--error { color: var(--crit); }
+.log__lv--warn { color: var(--warn); }
+.log__lv--info { color: var(--muted); }
+.log__lv--debug { color: var(--muted); opacity: .75; }
+.log__msg { overflow-wrap: anywhere; }
+
+/* ── 운영 명령 ── */
+.ops { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px; }
+.cmd { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 11px 12px; display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center;
+  box-shadow: var(--shadow); }
+.cmd__text { grid-column: 1; display: flex; flex-direction: column; }
+.cmd__label { font-size: .84rem; font-weight: 600; }
+.cmd__note { font-size: .74rem; color: var(--muted); }
+.cmd__code { grid-column: 1 / -1; grid-row: 2; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px 8px; font-size: .76rem; overflow-x: auto; white-space: nowrap; color: var(--ink); }
+.copy { grid-column: 2; grid-row: 1; font: inherit; font-size: .74rem; padding: 4px 11px;
+  border: 1px solid var(--accent); background: transparent; color: var(--accent);
+  border-radius: 4px; cursor: pointer; }
+.copy:hover { background: var(--accent); color: var(--surface); }
+.copy[data-done="1"] { background: var(--ok); border-color: var(--ok); color: var(--surface); }
+
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+footer { color: var(--muted); font-size: .78rem; border-top: 1px solid var(--line); padding-top: 14px; }
+.note { font-size: .78rem; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="head">
+  <div>
+    <div class="head__id"><span class="head__mark"></span><h1>파이프라인 관제반</h1></div>
+    <p class="head__sub">${esc(d.slug || 'ai-company')} · CEO → 조사 → 집필 → 검수 → 배포 릴레이</p>
+  </div>
+  <div class="head__stamp">
+    스냅샷 시각
+    <span class="mono">${esc(stamp)}</span>
+  </div>
+</header>
+
+<section class="tiles">
+  ${tiles
+    .map(
+      (t) => `<div class="tile tile--${t.tone}">
+    <span class="tile__k">${esc(t.k)}</span>
+    <span class="tile__v">${esc(t.v)}${t.u ? `<span>${esc(t.u)}</span>` : ''}</span>
+    <span class="tile__note">${esc(t.note)}</span>
+  </div>`
+    )
+    .join('\n  ')}
+</section>
+
+<section>
+  <h2 style="margin-bottom:9px">단계별 적체</h2>
+  <div class="relay">${relay(d.tasks)}</div>
+</section>
+
+<div class="cols">
+  <div class="stack">
+
+    <section class="panel">
+      <div class="panel__head">
+        <h2>작업 큐</h2>
+        <div class="filters">
+          <button type="button" data-filter="all" aria-pressed="true">전체</button>
+          <button type="button" data-filter="pending" aria-pressed="false">대기</button>
+          <button type="button" data-filter="failed" aria-pressed="false">실패</button>
+          <button type="button" data-filter="done" aria-pressed="false">완료</button>
+        </div>
+      </div>
+      <div class="panel__body panel__body--flush scroll">
+        ${
+          d.tasks.length
+            ? `<table>
+          <thead><tr><th>#</th><th>단계</th><th>작업</th><th>상태</th><th>갱신</th></tr></thead>
+          <tbody>
+            ${d.tasks
+              .map((t) => {
+                const round = t.payload?.round;
+                return `<tr data-status="${esc(t.status)}">
+              <td class="id">${esc(t.id)}</td>
+              <td>${esc(ROLE_LABEL[t.role] || t.role)}</td>
+              <td class="title">${esc(t.title)}
+                <div class="rowmeta">시도 ${esc(t.attempts)}${round ? ` · 왕복 ${esc(round)}` : ''}${
+                  t.result?.error ? ` · ${esc(String(t.result.error).slice(0, 70))}` : ''
+                }</div>
+              </td>
+              <td>${chip(t.status)}</td>
+              <td class="rowmeta">${esc(ago(t.updated_at || t.created_at))}</td>
+            </tr>`;
+              })
+              .join('\n            ')}
+          </tbody>
+        </table>`
+            : '<p class="empty">작업이 없다.</p>'
+        }
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head">
+        <h2>최근 이벤트</h2>
+        <span class="note">경고·실패 ${problems.length}건</span>
+      </div>
+      <div class="panel__body panel__body--flush scroll">
+        ${
+          d.logs.length
+            ? `<ul class="log">
+          ${d.logs
+            .slice(0, 28)
+            .map(
+              (l) => `<li>
+            <span class="log__t">${esc(String(l.ts).slice(11, 16))}</span>
+            <span class="log__lv log__lv--${esc(l.level)}">${esc(l.level)}</span>
+            <span class="log__msg">${esc(String(l.msg).slice(0, 220))}</span>
+          </li>`
+            )
+            .join('\n          ')}
+        </ul>`
+            : '<p class="empty">로그가 없다.</p>'
+        }
+      </div>
+    </section>
+
+  </div>
+
+  <div class="stack">
+
+    <section class="panel">
+      <div class="panel__head"><h2>현재 전략</h2></div>
+      <div class="panel__body">
+        ${
+          d.strategy
+            ? `<p style="margin:0 0 8px"><strong>${esc(d.strategy.goal || '목표 없음')}</strong></p>
+        <p class="note" style="margin:0 0 6px">지표 · ${esc(d.strategy.metric || '—')}</p>
+        <p class="note" style="margin:0">가설 · ${esc(d.strategy.hypothesis || '—')}</p>`
+            : '<p class="empty" style="padding:0">저장된 전략이 없다. <code>kick ceo</code> 로 세운다.</p>'
+        }
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head"><h2>발행물</h2><span class="note">${d.published.length}편</span></div>
+      <div class="panel__body panel__body--flush">
+        ${
+          d.published.length
+            ? `<ul class="list">${d.published
+                .map(
+                  (p) => `<li><span class="list__main"><span class="list__title">${esc(p.title)}</span>
+          <span class="list__meta">${esc(p.date)} · ${esc(p.bytes)}B</span></span></li>`
+                )
+                .join('')}</ul>`
+            : '<p class="empty">아직 발행된 글이 없다.</p>'
+        }
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head"><h2>검수 대기 초안</h2><span class="note">${d.drafts.length}편</span></div>
+      <div class="panel__body panel__body--flush">
+        ${
+          d.drafts.length
+            ? `<ul class="list">${d.drafts
+                .map(
+                  (p) => `<li><span class="list__main"><span class="list__title">${esc(p.title)}</span>
+          <span class="list__meta">${esc(p.slug)} · ${esc(p.bytes)}B</span></span>${chip('pending')}</li>`
+                )
+                .join('')}</ul>`
+            : '<p class="empty">초안 없음. 검수를 통과해야 발행된다.</p>'
+        }
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head"><h2>LLM 제공자</h2></div>
+      <div class="panel__body panel__body--flush">
+        <ul class="list">
+          ${d.providers
+            .map(
+              (p) => `<li><span class="list__main"><span class="list__title mono">${esc(p.name)}</span>
+        <span class="list__meta">${esc(p.detail)}</span></span>${providerChip(p.state)}</li>`
+            )
+            .join('')}
+        </ul>
+        <p class="note" style="padding:10px 14px;margin:0;border-top:1px solid var(--line)">
+          1토큰 요청을 실제로 보내 확인한 결과다. 모델 목록이 보여도 대화는 막혀 있는 경우가 있다.
+          일일 한도는 모델마다 따로 걸리며, 막히면 라우터가 같은 키의 다른 모델로 넘어간다.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel__head"><h2>CI 실행</h2></div>
+      <div class="panel__body panel__body--flush">
+        ${
+          d.ci.runs.length
+            ? `<ul class="list">${d.ci.runs
+                .map(
+                  (r) => `<li><span class="list__main"><span class="list__title"><a href="${esc(
+                    r.url
+                  )}" target="_blank" rel="noopener">${esc(r.name)}</a></span>
+          <span class="list__meta">${esc(r.event)} · ${esc(r.seconds)}초 · ${esc(ago(r.at))}</span></span>${chip(
+                    r.status !== 'completed' ? 'running' : r.conclusion === 'success' ? 'done' : 'failed'
+                  )}</li>`
+                )
+                .join('')}</ul>`
+            : `<p class="empty">${esc(d.ci.note || '실행 기록 없음')}</p>`
+        }
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<section>
+  <h2 style="margin-bottom:9px">운영 명령</h2>
+  <p class="note" style="margin:0 0 10px">
+    이 페이지는 스냅샷이라 여기서 직접 실행하지 않는다. 명령을 복사해 저장소 폴더에서 실행한다.
+  </p>
+  <div class="ops">
+    ${cmd('이 화면 새로 굽기', 'node --env-file=.env src/run.js dashboard', '현재 상태로 다시 생성한다')}
+    ${cmd('큐 처리', 'node --env-file=.env src/run.js worker', '우선순위 순으로 처리한다')}
+    ${cmd('한 단계만 처리', 'node --env-file=.env src/run.js worker qa', '역할을 바꿔 단계별로 검증한다')}
+    ${cmd('사이트 다시 굽기', 'node src/run.js build', 'md → html, 목록 갱신, 유령 페이지 정리')}
+    ${cmd('키 점검', 'node --env-file=.env src/run.js doctor', '어느 제공자가 살아있는지 확인한다')}
+    ${cmd('멈춘 작업 되살리기', 'node --env-file=.env src/run.js reset', 'running·failed 를 pending 으로 되돌린다')}
+    ${cmd('전략 다시 세우기', 'node --env-file=.env src/run.js kick ceo', '큐에 새 조사 작업이 들어간다')}
+    ${
+      d.slug
+        ? cmd('CI 수동 실행', `https://github.com/${d.slug}/actions/workflows/company.yml`, '주소를 열어 Run workflow 를 누른다')
+        : ''
+    }
+  </div>
+</section>
+
+<footer>
+  브라우저에서 DB를 직접 읽지 않는다 — 그러려면 RLS를 우회하는 service_role 키를 이 파일에 심어야 한다.
+  Node 가 읽어서 구운 스냅샷이므로, 최신 상태가 필요하면 다시 굽는다.
+</footer>
+
+</div>
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.filters button');
+  var rows = document.querySelectorAll('tbody tr[data-status]');
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var want = b.getAttribute('data-filter');
+      buttons.forEach(function (o) { o.setAttribute('aria-pressed', String(o === b)); });
+      rows.forEach(function (r) {
+        r.style.display = (want === 'all' || r.getAttribute('data-status') === want) ? '' : 'none';
+      });
+    });
+  });
+
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var text = b.getAttribute('data-copy');
+      var done = function () {
+        var old = b.textContent;
+        b.textContent = '복사됨';
+        b.setAttribute('data-done', '1');
+        setTimeout(function () { b.textContent = old; b.removeAttribute('data-done'); }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, fallback);
+      } else { fallback(); }
+      function fallback() {
+        // 클립보드가 막힌 환경에서는 명령을 선택해 준다. 직접 복사하면 된다.
+        var code = b.parentNode.querySelector('.cmd__code');
+        if (!code) return;
+        var range = document.createRange();
+        range.selectNodeContents(code);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        b.textContent = '선택됨';
+        setTimeout(function () { b.textContent = '복사'; }, 1600);
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>
+`;
+}
+
+export async function dashboard({ log = console.log } = {}) {
+  const data = await gather();
+  const html = render(data);
+  const out = path.join(ROOT, 'dashboard.html');
+  await fs.writeFile(out, html, 'utf8');
+  log(
+    `dashboard.html 생성 — 작업 ${data.tasks.length}건, 발행 ${data.published.length}편, 초안 ${data.drafts.length}편, 제공자 ${
+      data.providers.filter((p) => p.state === 'ok').length
+    }/${data.providers.length} 사용 가능`
+  );
+  return { out, data };
+}
