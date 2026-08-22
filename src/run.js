@@ -4,6 +4,10 @@
 //   node src/run.js worker qa       # 그 역할의 작업만 처리 (단계별 검증용)
 //   node src/run.js build           # site/posts/*.md 를 실제 HTML로 굽는다
 //   node src/run.js dashboard       # 관제 화면(dashboard.html) 생성
+//   node src/run.js drafts          # 검수 대기 초안 목록
+//   node src/run.js review <slug>   # 초안 전문 읽기
+//   node src/run.js approve <slug>  # 사람이 직접 통과 → 발행
+//   node src/run.js reject <slug> "사유"  # 사람이 직접 반려 → producer 에 수정 작업
 //   node src/run.js kick research   # 특정 역할을 직접 깨움 (하루 1회 등)
 
 import { ROLES } from './roles/index.js';
@@ -17,6 +21,79 @@ import { dashboard } from './dashboard.js';
 const BATCH = Number(process.env.BATCH_SIZE || 3);
 
 const MAX_ROUNDS = Number(process.env.MAX_ROUNDS || 4);
+
+// ---------- 사람이 하는 검수 ----------
+// QA 에이전트가 판정하지만 최종 결정권은 사람에게 있어야 한다.
+// 에이전트를 기다리지 않고 직접 통과시키거나 반려할 수 있어야 한다.
+
+async function draftFiles() {
+  const fs = await import('node:fs/promises');
+  try {
+    return (await fs.readdir('drafts')).filter((n) => n.endsWith('.md') && n !== 'README.md');
+  } catch {
+    return [];
+  }
+}
+
+async function drafts() {
+  const fs = await import('node:fs/promises');
+  const names = await draftFiles();
+  if (!names.length) {
+    console.log('검수 대기 초안이 없다.');
+    return;
+  }
+  console.log(`검수 대기 ${names.length}편`);
+  console.log('');
+  for (const n of names) {
+    const raw = await fs.readFile(`drafts/${n}`, 'utf8');
+    const title = /^title:\s*(.+)$/m.exec(raw)?.[1]?.trim() || '(제목 없음)';
+    const body = raw.replace(/^---[\s\S]*?---/, '');
+    const urls = raw.match(/https?:\/\/[^\s"'\],]+/g) || [];
+    console.log(`  ${n.replace(/\.md$/, '')}`);
+    console.log(`    ${title}`);
+    console.log(`    본문 ${body.trim().length}자 · 출처 ${urls.length}개`);
+    for (const u of urls) console.log(`      ${u}`);
+    console.log('');
+  }
+  console.log('전문 보기:  node src/run.js review <slug>');
+  console.log('통과:       node --env-file=.env src/run.js approve <slug>');
+  console.log('반려:       node --env-file=.env src/run.js reject <slug> "사유"');
+}
+
+async function review(slug) {
+  const fs = await import('node:fs/promises');
+  if (!slug) throw new Error('슬러그를 지정해라. 목록은 drafts 로 본다.');
+  const raw = await fs.readFile(`drafts/${slug.replace(/\.md$/, '')}.md`, 'utf8');
+  console.log(raw);
+}
+
+async function approve(slug) {
+  if (!slug) throw new Error('슬러그를 지정해라.');
+  const r = await toolImpl.approve_post({ slug });
+  if (r.error) throw new Error(r.error);
+  console.log(`발행됨 — ${r.published} (${r.bytes}B)`);
+  await rebuildSite();
+  await log('human', 'info', `사람이 직접 통과시킴: ${slug}`);
+}
+
+async function reject(slug, why) {
+  if (!slug) throw new Error('슬러그를 지정해라.');
+  if (!why) throw new Error('반려 사유를 적어라. 사유 없는 반려는 producer 가 고칠 수 없다.');
+  const t = await enqueue({
+    role: 'producer',
+    title: `사람 검수 반려: ${slug}`,
+    priority: 2,
+    payload: {
+      slug,
+      filepath: `drafts/${slug}.md`,
+      issues: [{ problem: why, source: '사람 검수' }],
+      instructions: why,
+      round: 1,
+    },
+  });
+  console.log(`반려 — producer 에 수정 작업 #${t?.id} 등록`);
+  await log('human', 'info', `사람이 직접 반려: ${slug} — ${why}`);
+}
 
 async function handleTask(task) {
   const role = ROLES[task.role];
@@ -208,6 +285,10 @@ const main = {
   reset,
   build: () => build(),
   dashboard: () => dashboard(),
+  drafts,
+  review: () => review(arg),
+  approve: () => approve(arg),
+  reject: () => reject(arg, process.argv.slice(4).join(' ')),
   seed: async () => {
     await enqueue({ role: 'ceo', title: '회사 최초 전략 수립', priority: 1 });
     console.log('초기 작업 등록 완료');
@@ -215,11 +296,13 @@ const main = {
 }[cmd || 'worker'];
 
 if (!main) {
-  console.error('사용법: node src/run.js [worker [role]|kick <role>|build|dashboard|health|doctor|reset|seed]');
+  console.error('사용법: node src/run.js [worker [role]|kick <role>|build|dashboard|drafts|review <slug>|approve <slug>|reject <slug> <사유>|health|doctor|reset|seed]');
   process.exit(1);
 }
 
 main().catch((e) => {
-  console.error('치명적 오류:', e);
+  // 사람이 손으로 치는 명령이 늘었다. 스택 트레이스를 쏟아내는 대신 무엇이 잘못됐는지만 말한다.
+  console.error(`오류: ${e.message}`);
+  if (process.env.DEBUG) console.error(e);
   process.exit(1);
 });

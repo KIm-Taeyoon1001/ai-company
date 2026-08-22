@@ -58,6 +58,18 @@ node --env-file=.env src/run.js reset    # 멈춘 작업 되살리기
 node --env-file=.env src/run.js seed     # CEO에 최초 작업 투입
 ```
 
+사람이 직접 검수할 때:
+
+```bash
+node src/run.js drafts                       # 검수 대기 목록 (제목·분량·출처 URL)
+node src/run.js review <slug>                # 초안 전문
+node --env-file=.env src/run.js approve <slug>          # 통과 → site/posts 로 발행 + 사이트 재생성
+node --env-file=.env src/run.js reject <slug> "사유"     # 반려 → producer 에 수정 작업
+```
+
+QA 에이전트가 판정하지만 최종 결정권은 사람에게 있다. 에이전트를 기다리지 않고 직접 처리해도 된다.
+`approve` 는 QA 가 쓰는 것과 같은 `approve_post` 를 호출하므로 발행일도 똑같이 승인 시점으로 박힌다.
+
 `.env`는 커밋 금지(.gitignore에 있음). 필요한 키는 `.env.example` 참고.
 
 ## 실제로 터졌던 문제들 — 다시 건드릴 때 주의
