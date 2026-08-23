@@ -13,8 +13,10 @@ const ROOT = process.cwd();
 // 이게 없으면 producer↔qa 반려 루프가 영원히 돈다 — 반려할 때마다 새 task가 생겨서
 // attempts<3 안전장치가 걸리지 않는다.
 let currentTask = null;
+let searchCount = 0; // 작업 하나가 검색을 몇 번 했는가
 export function setCurrentTask(t) {
   currentTask = t || null;
+  searchCount = 0;
 }
 
 /** 저장소 밖으로 나가는 경로 차단 */
@@ -32,6 +34,18 @@ const fetchCount = new Map(); // 같은 URL도 마찬가지. 안내문만으로�
 export const toolImpl = {
   async web_search({ query, count = 5 }) {
     const key = String(query).trim().toLowerCase();
+    // 프롬프트로 "최대 3회"라고 해도 안 지킨다. 실제로 한 작업에서 7번 검색하고
+    // 인계를 못 한 채 예산을 태웠다. 안내문이 아니라 거절로 막는다.
+    if (!searchCache.has(key)) {
+      searchCount += 1;
+      if (searchCount > 3) {
+        return {
+          error: '검색을 이미 3번 했다. 더 찾지 말고 지금까지 읽은 것으로 결과를 넘겨라. ' +
+            '읽을 만한 자료가 없었다면 그 사실을 적어 다음 단계로 넘겨라.',
+          searches_done: searchCount - 1,
+        };
+      }
+    }
     if (searchCache.has(key)) {
       return {
         note: '이 검색어는 이미 조회했다. 같은 검색을 반복하지 말고 결과를 web_fetch로 읽거나 다음 단계로 넘어가라.',
