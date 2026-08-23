@@ -95,7 +95,19 @@ export const toolImpl = {
         hint: '이 사이트는 막혀 있다. 다른 URL을 시도하고, 이 URL은 근거로 쓰지 마라.',
       };
     }
-    const html = await res.text();
+    // 한국 정부·협회 사이트는 아직 EUC-KR 이 많다. UTF-8 로 읽으면 글자가 통째로 깨지고,
+    // 깨진 글로 조사한 결과는 쓸 수 없다. 헤더와 meta 를 보고 맞는 인코딩으로 다시 읽는다.
+    const buf = Buffer.from(await res.arrayBuffer());
+    let charset = /charset=["']?([\w-]+)/i.exec(res.headers.get('content-type') || '')?.[1];
+    let html = buf.toString('utf8');
+    if (!charset) charset = /<meta[^>]+charset=["']?([\w-]+)/i.exec(html.slice(0, 2000))?.[1];
+    if (charset && !/^utf-?8$/i.test(charset)) {
+      try {
+        html = new TextDecoder(charset).decode(buf);
+      } catch {
+        // 모르는 인코딩이면 utf8 로 읽은 것을 그대로 쓴다
+      }
+    }
     const text = strip(
       html
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -260,7 +272,7 @@ export const toolSpecs = [
     slug: { type: 'string' },
   }, ['slug']),
   spec('create_task', '다른 역할의 에이전트에게 후속 작업을 넘긴다.', {
-    role: { type: 'string', enum: ['ceo', 'research', 'producer', 'qa', 'publisher', 'cfo'] },
+    role: { type: 'string', enum: ['editor', 'research', 'writer', 'qa'] },
     title: { type: 'string' },
     payload: { type: 'object' },
     priority: { type: 'integer', description: '1이 가장 높음, 기본 5' },

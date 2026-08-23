@@ -8,6 +8,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { renderMarkdown, parseFrontMatter } from './render.js';
 
+const NEWLINE = String.fromCharCode(10);
 const ROOT = process.cwd();
 export const DRAFTS = path.join(ROOT, 'drafts'); // 검수 전
 export const READY = path.join(ROOT, 'ready'); // 검수 통과, 발행 대기
@@ -66,7 +67,20 @@ export async function read(slug, stage = 'drafts') {
 export async function save({ slug, title, tags = [], sources = [], pillar = '', keyword = '', body }) {
   const s = safeSlug(slug);
   if (!title) throw new Error('제목이 없다');
-  if (!body || body.trim().length < 200) throw new Error('본문이 너무 짧다(200자 미만)');
+  // 길이는 프롬프트로 부탁하면 안 지킨다. 저장 단계에서 막는다.
+  const text = String(body || '').trim();
+  if (text.length < 1200) {
+    throw new Error(
+      `본문이 ${text.length}자다. 1500자 이상 써라. 표만 나열하지 말고 각 항목이 무엇을 뜻하는지, ` +
+        `언제 병원에 가야 하는지, 어떻게 대비하는지를 문장으로 설명해라.`
+    );
+  }
+  // 한 칸짜리 표는 표일 이유가 없다. 목록으로 써야 읽힌다.
+  for (const line of text.split(NEWLINE)) {
+    if (/^\s*\|[^|]+\|\s*$/.test(line)) {
+      throw new Error('열이 하나뿐인 표가 있다. 그건 목록(- 항목)으로 써라. 표는 비교할 값이 둘 이상일 때만 쓴다.');
+    }
+  }
   const front = [
     '---',
     `title: ${title}`,

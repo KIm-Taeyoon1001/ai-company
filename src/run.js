@@ -4,6 +4,7 @@
 //   node src/run.js worker qa       # 그 역할의 작업만 처리
 //   node src/run.js kick editor     # 편집장을 깨워 이번 주 주제를 고르게 한다
 //   node src/run.js serve           # 관제 화면 (검수·복사까지 여기서)
+//   node src/run.js audit          # 이미 올라간 글 전체 품질 검사
 //   node src/run.js ready           # 발행 대기 목록
 //   node src/run.js copy <slug>     # 티스토리에 붙여넣을 제목·태그·본문 출력
 //   node src/run.js done <slug> [url]  # 발행 완료 기록
@@ -14,6 +15,7 @@ import { runAgent } from './agent.js';
 import { claimTasks, finishTask, enqueue, log, revenueSummary, recall, update } from './db.js';
 import { toolImpl, setCurrentTask } from './tools.js';
 import * as posts from './posts.js';
+import { audit } from './audit.js';
 import { forTistory } from './posts.js';
 import { dashboard } from './dashboard.js';
 import { serve } from './serve.js';
@@ -285,6 +287,7 @@ const main = {
   reset,
   dashboard: () => dashboard(),
   serve: () => serve().then(() => new Promise(() => {})), // Ctrl+C 까지 살아 있는다
+  audit: () => audit(),
   drafts,
   ready,
   review: () => review(arg),
