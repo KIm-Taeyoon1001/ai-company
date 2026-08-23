@@ -1,0 +1,88 @@
+name: blog
+
+# 주제선정 → 조사 → 집필 → 검수까지 자동으로 돌린다.
+# 발행은 사람이 한다 — 티스토리 API 가 없고, 사람이 한 번 읽는 것이 저품질 판정을 피하는 방법이다.
+#
+# public 저장소라 Actions 실행 시간이 무제한(=0원)이다.
+# cron 은 UTC 기준. KST = UTC+9.
+
+on:
+  schedule:
+    # 월요일 09:00 KST — 이번 주 주제 고르기 (2~3개)
+    - cron: '0 0 * * 1'
+    # 3시간마다 큐 처리. 글 1편에 조사·집필·검수 3단계가 필요하다.
+    # 30분마다 돌리지 않는 이유: 무료 LLM 의 일일 토큰이 한정돼 있고,
+    # 어차피 하루 1~3편이 안전 속도라 더 자주 돌 이유가 없다.
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'worker | worker research | worker writer | worker qa | kick editor'
+        default: worker
+
+concurrency:
+  group: blog
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      MAX_STEPS: '10'
+      BATCH_SIZE: '2'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: 실행할 명령 결정
+        id: pick
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 0 * * 1") echo "cmd=kick editor" >> $GITHUB_OUTPUT ;;
+            *)           echo "cmd=${{ github.event.inputs.command || 'worker' }}" >> $GITHUB_OUTPUT ;;
+          esac
+
+      - name: 에이전트 실행
+        run: node src/run.js ${{ steps.pick.outputs.cmd }}
+
+      # 에이전트가 중간에 실패해도 이미 쓰인 초안은 잃지 않는다.
+      # 실행마다 워크스페이스를 새로 체크아웃하므로, 커밋하지 않으면 다음 실행의 검수가 초안을 못 찾는다.
+      - name: 결과물 커밋
+        if: always()
+        run: |
+          git config user.name  "blog-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add drafts/ ready/ published/ || true
+          if git diff --staged --quiet; then
+            echo "변경 없음"
+          else
+            git commit -m "chore(bot): $(date -u +%Y-%m-%dT%H:%MZ) 초안 갱신"
+            git pull --rebase --autostash origin main || true
+            git push
+          fi
+
+      - name: 발행 대기 요약
+        if: always()
+        run: |
+          echo "### 발행 대기" >> $GITHUB_STEP_SUMMARY
+          if ls ready/*.md >/dev/null 2>&1; then
+            for f in ready/*.md; do
+              [ "$(basename "$f")" = "README.md" ] && continue
+              echo "- $(grep -m1 '^title:' "$f" | sed 's/^title: //')  (\`$(basename "$f" .md)\`)" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "_없음_" >> $GITHUB_STEP_SUMMARY
+          fi

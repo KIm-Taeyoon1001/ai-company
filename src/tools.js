@@ -14,6 +14,9 @@ const ROOT = process.cwd();
 // attempts<3 안전장치가 걸리지 않는다.
 let currentTask = null;
 let searchCount = 0; // 작업 하나가 검색을 몇 번 했는가
+// 3회는 너무 빡빡했다. 한국어 질의는 검색 품질이 들쭉날쭉해서 몇 번 더 필요하다.
+// 다만 무제한이면 7번씩 돌다 인계를 못 한다. 그 중간이 5다.
+const SEARCH_LIMIT = Number(process.env.SEARCH_LIMIT || 5);
 export function setCurrentTask(t) {
   currentTask = t || null;
   searchCount = 0;
@@ -38,10 +41,10 @@ export const toolImpl = {
     // 인계를 못 한 채 예산을 태웠다. 안내문이 아니라 거절로 막는다.
     if (!searchCache.has(key)) {
       searchCount += 1;
-      if (searchCount > 3) {
+      if (searchCount > SEARCH_LIMIT) {
         return {
-          error: '검색을 이미 3번 했다. 더 찾지 말고 지금까지 읽은 것으로 결과를 넘겨라. ' +
-            '읽을 만한 자료가 없었다면 그 사실을 적어 다음 단계로 넘겨라.',
+          error: `검색을 이미 ${SEARCH_LIMIT}번 했다. 더 찾지 말고 지금까지 읽은 것으로 결과를 넘겨라. ` +
+            `읽은 자료가 하나라도 있으면 그것으로 쓸 수 있는 만큼만 써서 넘겨라. 전부 되돌리지 마라.`,
           searches_done: searchCount - 1,
         };
       }
