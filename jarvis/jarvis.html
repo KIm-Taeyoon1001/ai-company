@@ -132,8 +132,7 @@ setInterval(() => {
 }, 250);
 
 // ───────── 음성 합성 (말하기) ─────────
-// 자비스 느낌은 "낮고 차분한 남성 집사"다. 남성 신경망 음성이 있으면 그걸 쓰고,
-// 없으면 여성 음성의 음높이를 끌어내려 최대한 가깝게 만든다.
+// 자비스 느낌은 "낮고 차분한 남성 집사"다. 남성 신경망 음성이 있으면 그걸 쓴다.
 // 엣지(Edge)에는 남성 한국어 신경망 음성(InJoon·Hyunsu)이 기본으로 들어 있어 가장 비슷하다.
 const MALE = /InJoon|Hyunsu|인준|현수|male|남성/i;
 let voices = [];
@@ -209,8 +208,9 @@ function speak(text) {
       const u = new SpeechSynthesisUtterance(part);
       u.lang = 'ko-KR';
       if (voice) u.voice = voice;
-      u.rate = male ? 0.98 : 0.92;   // 서두르지 않는다
-      u.pitch = male ? 0.8 : 0.45;   // 여성 음성이면 크게 낮춰 중저음으로
+      // 음높이를 건드리면 기계음이 된다. 원래 목소리 그대로, 속도만 살짝 늦춘다
+      u.rate = 0.97;
+      u.pitch = 1;
       u.onboundary = () => { state.speakPulse = 1; };
       if (i === parts.length - 1) u.onend = u.onerror = () => resolve();
       speechSynthesis.speak(u);
