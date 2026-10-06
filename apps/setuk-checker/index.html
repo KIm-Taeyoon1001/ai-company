@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>세특 검수기</title>
+<meta name="description" content="세특·행특 문장을 2026 학생부 기재요령 기준으로 검사합니다. 기재 금지 항목, 바이트 초과, 학생 간 중복 문장을 찾아줍니다. 입력한 글은 브라우저 밖으로 나가지 않습니다.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&family=Nanum+Myeongjo:wght@800&display=swap">
+<style>
+/* 레이아웃: 왼쪽 원고(입력), 오른쪽 검수 결과. 결재 서류에 붉은 인주로 표시하듯 문제를 원문 위에 바로 표시한다 */
+:root {
+  --paper: #f3f5f6;
+  --sheet: #ffffff;
+  --ink: #1b2430;
+  --ink-soft: #5a6676;
+  --rule: #d9dee4;
+  --stamp: #c4352b;        /* 기재 금지 */
+  --stamp-bg: #fbe7e4;
+  --caution: #a15c00;      /* 주의 */
+  --caution-bg: #fdf0d6;
+  --dup: #5b4bb7;          /* 중복 */
+  --dup-bg: #ebe8fb;
+  --ok: #2f7a4b;
+  --ok-bg: #e2f2e7;
+  --accent: #23466e;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-mark: "Nanum Myeongjo", "AppleMyungjo", "Batang", serif;
+  --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12161c; --sheet: #1a2028; --ink: #e5e9ee; --ink-soft: #9aa6b4; --rule: #2c3540;
+    --stamp: #ff7a6e; --stamp-bg: #3a1d1b; --caution: #f0b450; --caution-bg: #382a12;
+    --dup: #a99cff; --dup-bg: #29244a; --ok: #6fcf93; --ok-bg: #17301f; --accent: #8db6e6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12161c; --sheet: #1a2028; --ink: #e5e9ee; --ink-soft: #9aa6b4; --rule: #2c3540;
+  --stamp: #ff7a6e; --stamp-bg: #3a1d1b; --caution: #f0b450; --caution-bg: #382a12;
+  --dup: #a99cff; --dup-bg: #29244a; --ok: #6fcf93; --ok-bg: #17301f; --accent: #8db6e6;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.65;
+  padding-inline: 16px; padding-block: 0 48px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; }
+header.top {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+  padding-block: 22px 18px; border-bottom: 1px solid var(--rule); margin-bottom: 20px;
+}
+.brand { display: flex; align-items: center; gap: 12px; }
+.seal {
+  width: 44px; height: 44px; border: 2.5px solid var(--stamp); border-radius: 50%;
+  display: grid; place-items: center; color: var(--stamp);
+  font-family: var(--font-mark); font-weight: 800; font-size: 20px; transform: rotate(-8deg);
+}
+.brand h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+.brand p { margin: 0; color: var(--ink-soft); font-size: 13px; }
+.privacy {
+  margin-left: auto; font-size: 13px; color: var(--ok); background: var(--ok-bg);
+  padding: 6px 12px; border-radius: 999px;
+}
+.grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } .privacy { margin-left: 0; } }
+
+.panel { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; }
+.panel h2 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.hint { margin: 0 0 12px; font-size: 13px; color: var(--ink-soft); }
+.hint code { font-family: var(--font-num); font-size: 12px; background: var(--paper); padding: 1px 5px; border-radius: 4px; }
+textarea {
+  width: 100%; min-height: 420px; resize: vertical; padding: 14px;
+  border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); color: var(--ink);
+  font: inherit; font-size: 14px; line-height: 1.7;
+}
+textarea:focus, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.controls label { font-size: 13px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; }
+select, input[type=number] {
+  font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--rule);
+  border-radius: 6px; background: var(--sheet); color: var(--ink);
+}
+input[type=number] { width: 90px; font-family: var(--font-num); }
+button {
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--rule); background: var(--sheet); color: var(--ink);
+  padding: 7px 14px; border-radius: 6px;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--sheet); }
+button:hover { filter: brightness(0.96); }
+.sample-note { font-size: 12px; color: var(--caution); margin-top: 8px; }
+
+.summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.stat {
+  display: flex; align-items: baseline; gap: 6px; padding: 8px 12px; border-radius: 8px;
+  background: var(--sheet); border: 1px solid var(--rule); font-size: 13px; color: var(--ink-soft);
+}
+.stat b { font-family: var(--font-num); font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.stat.ban b { color: var(--stamp); } .stat.warn b { color: var(--caution); } .stat.dup b { color: var(--dup); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.toolbar .spacer { flex: 1; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--sheet); border-color: var(--ink); }
+.copied { font-size: 13px; color: var(--ok); }
+
+.cards { display: flex; flex-direction: column; gap: 12px; }
+.card { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.card.has-ban { border-left: 4px solid var(--stamp); }
+.card.has-warn:not(.has-ban) { border-left: 4px solid var(--caution); }
+.card-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 12px 16px; border-bottom: 1px solid var(--rule);
+}
+.card-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.chip.ban { color: var(--stamp); background: var(--stamp-bg); }
+.chip.warn { color: var(--caution); background: var(--caution-bg); }
+.chip.dup { color: var(--dup); background: var(--dup-bg); }
+.chip.ok { color: var(--ok); background: var(--ok-bg); }
+.bytes { margin-left: auto; display: flex; align-items: center; gap: 8px; font-family: var(--font-num); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.meter { width: 90px; height: 6px; background: var(--paper); border-radius: 3px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); }
+.meter.over i { background: var(--stamp); }
+.bytes.over { color: var(--stamp); }
+.text { padding: 14px 16px; font-size: 14.5px; line-height: 1.85; white-space: pre-wrap; word-break: keep-all; overflow-wrap: anywhere; }
+mark { color: inherit; padding: 1px 2px; border-radius: 3px; }
+mark.ban { background: var(--stamp-bg); box-shadow: inset 0 -2px 0 var(--stamp); }
+mark.warn { background: var(--caution-bg); box-shadow: inset 0 -2px 0 var(--caution); }
+mark.dup { background: var(--dup-bg); box-shadow: inset 0 -2px 0 var(--dup); }
+.issues { list-style: none; margin: 0; padding: 0 16px 14px; display: flex; flex-direction: column; gap: 8px; }
+.issue { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; font-size: 13px; }
+.issue .tag { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; height: fit-content; white-space: nowrap; }
+.issue .tag.ban { color: var(--stamp); background: var(--stamp-bg); }
+.issue .tag.warn { color: var(--caution); background: var(--caution-bg); }
+.issue .tag.dup { color: var(--dup); background: var(--dup-bg); }
+.issue strong { font-weight: 600; }
+.issue .tip { color: var(--ink-soft); }
+.empty { padding: 40px 20px; text-align: center; color: var(--ink-soft); background: var(--sheet); border: 1px dashed var(--rule); border-radius: 10px; }
+footer.note { margin-top: 28px; font-size: 12.5px; color: var(--ink-soft); max-width: 72ch; }
+@media (prefers-reduced-motion: no-preference) { .card { transition: border-color .2s; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="seal" aria-hidden="true">檢</div>
+      <div>
+        <h1>세특 검수기</h1>
+        <p>2026학년도 학생부 기재요령 기준 · 기재 금지 항목 · 바이트 · 학생 간 중복</p>
+      </div>
+    </div>
+    <div class="privacy">입력한 글은 이 브라우저 밖으로 나가지 않습니다</div>
+  </header>
+
+  <div class="grid">
+    <section class="panel" aria-labelledby="in-title">
+      <h2 id="in-title">원고</h2>
+      <p class="hint">학생 사이는 빈 줄로 나눕니다. 첫 줄이 짧으면 이름표로 씁니다(예: <code>3번 김OO</code>). 엑셀에서 복사해 붙여넣으면 줄마다 한 학생, 마지막 칸을 본문으로 읽습니다.</p>
+      <textarea id="src" spellcheck="false" aria-label="세특 원고"></textarea>
+      <div class="controls">
+        <label for="limit">글자 한도
+          <select id="limit">
+            <option value="1500">1,500바이트 (500자)</option>
+            <option value="1200">1,200바이트 (400자)</option>
+            <option value="900">900바이트 (300자)</option>
+            <option value="custom">직접 입력</option>
+          </select>
+        </label>
+        <input type="number" id="limitCustom" min="100" step="100" value="1500" hidden aria-label="바이트 한도 직접 입력">
+        <button type="button" id="loadSample">예시 불러오기</button>
+        <button type="button" id="clear">비우기</button>
+      </div>
+      <div class="sample-note" id="sampleNote" hidden>지금 보이는 글은 예시입니다. 지우고 실제 원고를 붙여넣으세요.</div>
+    </section>
+
+    <section aria-labelledby="out-title">
+      <h2 id="out-title" style="position:absolute;left:-9999px">검수 결과</h2>
+      <div class="summary" id="summary"></div>
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="보기">
+          <button type="button" id="fAll" aria-pressed="true">전체</button>
+          <button type="button" id="fIssue" aria-pressed="false">고칠 학생만</button>
+        </div>
+        <span class="spacer"></span>
+        <span class="copied" id="copied" hidden>결과를 복사했습니다</span>
+        <button type="button" id="copy">결과 복사</button>
+      </div>
+      <textarea id="reportOut" readonly hidden aria-label="검수 결과 텍스트" style="min-height:200px;margin-bottom:12px"></textarea>
+      <div class="cards" id="cards"></div>
+    </section>
+  </div>
+
+  <footer class="note">
+    바이트는 NEIS 방식(한글 3, 영문·숫자·공백 1, 줄바꿈 2)으로 셉니다. 검사 규칙은 2026학년도 기재요령의 주요 금지 항목을 정리한 것이고, 기관명처럼 예외가 있는 항목은 학교 지침으로 최종 확인하세요. 붉은 표시는 기재 금지, 노란 표시는 주의, 보라 표시는 다른 학생과 겹치는 문장입니다.
+  </footer>
+</div>
+
+<script>
+(() => {
+  // ── 규칙 ───────────────────────────────────────────────
+  const RULES = [
+    { level: 'ban', name: '수상 실적', re: /(최우수상|우수상|장려상|금상|은상|동상|입상|수상(?!자))/g,
+      tip: '세특에는 수상 실적을 적을 수 없습니다. 활동 과정과 배운 점만 남기세요.' },
+    { level: 'ban', name: '논문·학회', re: /(논문[^.\n]{0,12}(투고|게재|등재|발표)|학술지|학회지|학회에서|KCI|SCIE?\b)/g,
+      tip: '논문 투고·게재·학회 발표는 기재할 수 없습니다.' },
+    { level: 'ban', name: '도서 출간', re: /(출간|출판(?!사)|저서|발간)/g,
+      tip: '도서 출간 사실은 기재할 수 없습니다.' },
+    { level: 'ban', name: '지식재산권', re: /(특허|실용신안|상표\s*등록|디자인\s*등록|지식재산권)/g,
+      tip: '특허·실용신안 등 지식재산권 출원·등록은 기재할 수 없습니다.' },
+    { level: 'ban', name: '공인어학시험', re: /(TOEIC|TOEFL|TEPS|IELTS|JLPT|JPT|HSK|DELF|DELE|OPIc|토익|토플|텝스|아이엘츠|오픽)/gi,
+      tip: '공인어학시험 응시·점수는 기재할 수 없습니다.' },
+    { level: 'ban', name: '인증시험·자격', re: /(한국사능력검정|한자능력검정|한자\s*\d\s*급|컴퓨터활용능력|정보처리기능사|자격증)/g,
+      tip: '교과 세특에 인증시험·자격 취득을 적을 수 없습니다.' },
+    { level: 'ban', name: '부모 사회·경제적 지위', re: /((부모님?|아버지|어머니|아빠|엄마|부친|모친|외?삼촌|이모|고모|친척)[^.\n]{0,20}?(직업|근무|교수|의사|변호사|판사|검사|회사|대표|운영|원장|공무원|연구원)|(교수|의사|변호사|판사|검사|대표|원장|공무원|연구원)(인|이신|로 일하는|로 근무하는)\s*(부모님?|아버지|어머니|아빠|엄마|부친|모친|외?삼촌|이모|고모|친척))/g,
+      tip: '부모·친인척의 직업이나 사회·경제적 지위를 짐작할 수 있는 내용은 기재할 수 없습니다.' },
+    { level: 'ban', name: '영재·발명교육 실적', re: /(영재교육원|영재학급|발명교육센터)/g,
+      tip: '영재·발명교육 실적은 학생부에 기재할 수 없습니다.' },
+    { level: 'ban', name: '방과후학교', re: /방과\s*후\s*학교/g,
+      tip: '방과후학교 활동 내용은 기재할 수 없습니다.' },
+    { level: 'ban', name: '특정 대학·기관·상호명', re: /([가-힣A-Za-z]{2,12}(대학교|대학원|대학병원|연구소|연구원|재단|병원)|㈜|주식회사|KAIST|POSTECH|UNIST|DGIST|GIST|카이스트|포스텍|서울대|연세대|고려대)/g,
+      tip: '특정 대학·기관·상호명은 원칙적으로 기재할 수 없습니다. 예외 여부는 기재요령으로 확인하세요.' },
+    { level: 'warn', name: '사교육 언급', re: /(학원|과외|인강|인터넷\s*강의)/g,
+      tip: '사교육을 짐작할 수 있는 표현은 빼는 것이 안전합니다.' },
+    { level: 'warn', name: '교외·해외 활동', re: /(교외|외부\s*기관|캠프|해외|어학연수|유학|교환학생)/g,
+      tip: '교외 활동은 학교교육계획에 따른 활동인지 확인하세요.' },
+  ];
+  const CLICHES = ['돋보임', '돋보이는', '탁월', '뛰어난', '뛰어나', '인상적', '깊이 있는', '깊은 이해', '두각',
+    '남다른', '훌륭', '통찰력', '함양함', '모습을 보임', '모습을 보여', '계기가 됨', '발전 가능성', '다양한 관점',
+    '우수함', '열정', '기대됨', '기대된다'];
+  const CLICHE_MIN = 3;
+
+  // ── 유틸 ───────────────────────────────────────────────
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const neisBytes = (s) => { let b = 0; for (const ch of s) b += ch === '\n' ? 2 : (ch.codePointAt(0) < 128 ? 1 : 3); return b; };
+  const hasMieum = (ch) => { const c = ch.charCodeAt(0) - 0xAC00; return c >= 0 && c < 11172 && c % 28 === 16; };
+  const isHangul = (ch) => { const c = ch.charCodeAt(0); return c >= 0xAC00 && c <= 0xD7A3; };
+  const norm = (s) => s.replace(/[\s.,·'"“”‘’()\[\]-]/g, '');
+  const grams = (s) => { const g = new Set(); for (let i = 0; i < s.length - 2; i++) g.add(s.slice(i, i + 3)); return g; };
+  const jaccard = (a, b) => { let n = 0; for (const x of a) if (b.has(x)) n++; return n / (a.size + b.size - n || 1); };
+
+  // ── 입력 해석 ─────────────────────────────────────────
+  function parse(raw) {
+    const text = raw.replace(/\r\n?/g, '\n').trim();
+    if (!text) return [];
+    if (text.includes('\t')) {
+      return text.split('\n').filter((l) => l.trim()).map((l, i) => {
+        const cols = l.split('\t').map((c) => c.trim());
+        const body = cols.pop();
+        return { label: cols.filter(Boolean).join(' ') || `학생 ${i + 1}`, text: body };
+      }).filter((s) => s.text);
+    }
+    return text.split(/\n\s*\n/).map((block, i) => {
+      const lines = block.trim().split('\n');
+      if (lines.length > 1 && lines[0].length <= 20 && !/[.다함음됨임]$/.test(lines[0].trim())) {
+        return { label: lines[0].trim(), text: lines.slice(1).join('\n').trim() };
+      }
+      return { label: `학생 ${i + 1}`, text: block.trim() };
+    });
+  }
+
+  // 문장 단위로 쪼개면서 원문 위치를 유지한다
+  function sentences(text) {
+    const out = []; const re = /[^.!?\n]+[.!?]?/g; let m;
+    while ((m = re.exec(text))) {
+      const raw = m[0]; const lead = raw.length - raw.trimStart().length; const s = raw.trim();
+      if (s) out.push({ s, start: m.index + lead, end: m.index + lead + s.length });
+    }
+    return out;
+  }
+
+  // ── 검사 ───────────────────────────────────────────────
+  function check(students, limit) {
+    for (const st of students) {
+      st.issues = []; st.bytes = neisBytes(st.text); st.sents = sentences(st.text);
+      for (const r of RULES) {
+        r.re.lastIndex = 0; let m;
+        while ((m = r.re.exec(st.text))) {
+          st.issues.push({ level: r.level, name: r.name, tip: r.tip, start: m.index, end: m.index + m[0].length, hit: m[0] });
+        }
+      }
+      // 상투어: 한 학생 안에서 여러 번 나올 때만 표시
+      const cl = [];
+      for (const w of CLICHES) { let i = -1; while ((i = st.text.indexOf(w, i + 1)) !== -1) cl.push({ start: i, end: i + w.length, hit: w }); }
+      if (cl.length >= CLICHE_MIN) {
+        cl.forEach((c, k) => st.issues.push({ level: 'warn', name: '상투적 표현', group: 'cliche', first: k === 0,
+          tip: `평가어가 ${cl.length}곳에 쓰였습니다. 칭찬하는 말 대신 학생이 실제로 한 행동과 근거로 바꾸세요.`, ...c }));
+      }
+      // 종결: 학생부 서술은 '~함/~음/~임' 같은 명사형으로 끝낸다
+      for (const se of st.sents) {
+        const core = se.s.replace(/[.!?"'”’)\]\s]+$/, '');
+        const last = core.slice(-1);
+        if (last && isHangul(last) && !hasMieum(last)) {
+          st.issues.push({ level: 'warn', name: '종결 형태', start: se.start + Math.max(0, core.length - 4), end: se.start + core.length,
+            hit: core.slice(-4), tip: "학생부 문장은 '~함', '~음', '~임'처럼 명사형으로 끝냅니다." });
+        }
+      }
+      if (st.bytes > limit) {
+        st.issues.push({ level: 'ban', name: '글자 수 초과', tip: `${(st.bytes - limit).toLocaleString()}바이트(약 ${Math.ceil((st.bytes - limit) / 3)}자)를 줄여야 NEIS에 들어갑니다.`, hit: `${st.bytes.toLocaleString()} / ${limit.toLocaleString()}바이트` });
+      }
+    }
+    // 학생 간 중복 문장
+    const pool = [];
+    students.forEach((st, si) => st.sents.forEach((se) => { const n = norm(se.s); if (n.length >= 15) pool.push({ si, se, g: grams(n) }); }));
+    for (let a = 0; a < pool.length; a++) for (let b = a + 1; b < pool.length; b++) {
+      const A = pool[a], B = pool[b];
+      if (A.si === B.si) continue;
+      const sim = jaccard(A.g, B.g);
+      if (sim >= 0.7) {
+        const pct = Math.round(sim * 100);
+        students[A.si].issues.push({ level: 'dup', name: '다른 학생과 겹침', start: A.se.start, end: A.se.end, hit: A.se.s, tip: `${students[B.si].label}의 문장과 ${pct}% 같습니다.` });
+        students[B.si].issues.push({ level: 'dup', name: '다른 학생과 겹침', start: B.se.start, end: B.se.end, hit: B.se.s, tip: `${students[A.si].label}의 문장과 ${pct}% 같습니다.` });
+      }
+    }
+    return students;
+  }
+
+  // ── 그리기 ─────────────────────────────────────────────
+  const RANK = { ban: 0, dup: 1, warn: 2 };
+  const TAG = { ban: '금지', warn: '주의', dup: '중복' };
+
+  function highlight(text, issues) {
+    const spans = issues.filter((i) => i.start != null)
+      .sort((a, b) => a.start - b.start || RANK[a.level] - RANK[b.level]);
+    let out = '', pos = 0;
+    for (const sp of spans) {
+      if (sp.start < pos) continue;
+      out += esc(text.slice(pos, sp.start));
+      out += `<mark class="${sp.level}" title="${esc(sp.name)}">${esc(text.slice(sp.start, sp.end))}</mark>`;
+      pos = sp.end;
+    }
+    return out + esc(text.slice(pos));
+  }
+
+  function listItems(issues) {
+    const seen = new Set(); const items = [];
+    for (const i of [...issues].sort((a, b) => RANK[a.level] - RANK[b.level])) {
+      if (i.group === 'cliche') {
+        if (seen.has('cliche')) continue; seen.add('cliche');
+        const words = [...new Set(issues.filter((x) => x.group === 'cliche').map((x) => x.hit))].join(', ');
+        items.push({ ...i, hit: words });
+        continue;
+      }
+      const key = i.level + i.name + i.hit; if (seen.has(key)) continue; seen.add(key);
+      items.push(i);
+    }
+    return items;
+  }
+
+  let last = [], onlyIssues = false;
+
+  function render() {
+    const limit = currentLimit();
+    const students = check(parse($('src').value), limit);
+    last = students;
+    const count = (lv) => students.reduce((n, s) => n + listItems(s.issues).filter((i) => i.level === lv).length, 0);
+    const over = students.filter((s) => s.bytes > limit).length;
+    const clean = students.filter((s) => !s.issues.length).length;
+    $('summary').innerHTML = students.length ? `
+      <div class="stat"><b>${students.length}</b>명 검사</div>
+      <div class="stat ban"><b>${count('ban')}</b>건 기재 금지</div>
+      <div class="stat warn"><b>${count('warn')}</b>건 주의</div>
+      <div class="stat dup"><b>${count('dup')}</b>건 중복</div>
+      <div class="stat"><b>${over}</b>명 글자 수 초과</div>
+      <div class="stat"><b>${clean}</b>명 통과</div>` : '';
+
+    const shown = onlyIssues ? students.filter((s) => s.issues.length) : students;
+    if (!students.length) { $('cards').innerHTML = '<div class="empty">왼쪽에 세특 원고를 붙여넣으면 바로 검사합니다.</div>'; return; }
+    if (!shown.length) { $('cards').innerHTML = '<div class="empty">고칠 학생이 없습니다. 모두 통과했습니다.</div>'; return; }
+
+    $('cards').innerHTML = shown.map((s) => {
+      const items = listItems(s.issues);
+      const n = (lv) => items.filter((i) => i.level === lv).length;
+      const chips = [n('ban') && `<span class="chip ban">금지 ${n('ban')}</span>`, n('dup') && `<span class="chip dup">중복 ${n('dup')}</span>`,
+        n('warn') && `<span class="chip warn">주의 ${n('warn')}</span>`].filter(Boolean).join('') || '<span class="chip ok">통과</span>';
+      const pct = Math.min(100, (s.bytes / limit) * 100); const isOver = s.bytes > limit;
+      const cls = ['card', n('ban') && 'has-ban', (n('warn') || n('dup')) && 'has-warn'].filter(Boolean).join(' ');
+      return `<article class="${cls}">
+        <div class="card-head"><h3>${esc(s.label)}</h3><div class="chips">${chips}</div>
+          <div class="bytes ${isOver ? 'over' : ''}"><span class="meter ${isOver ? 'over' : ''}"><i style="width:${pct}%"></i></span>${s.bytes.toLocaleString()} / ${limit.toLocaleString()}B</div></div>
+        <div class="text">${highlight(s.text, s.issues)}</div>
+        ${items.length ? `<ul class="issues">${items.map((i) => `<li class="issue"><span class="tag ${i.level}">${TAG[i.level]}</span>
+          <div><strong>${esc(i.name)}</strong> · “${esc(i.hit.length > 40 ? i.hit.slice(0, 40) + '…' : i.hit)}”<div class="tip">${esc(i.tip)}</div></div></li>`).join('')}</ul>` : ''}
+      </article>`;
+    }).join('');
+  }
+
+  function currentLimit() {
+    const v = $('limit').value;
+    if (v === 'custom') return Math.max(100, parseInt($('limitCustom').value, 10) || 1500);
+    return parseInt(v, 10);
+  }
+
+  function report() {
+    const limit = currentLimit();
+    const lines = [`세특 검수 결과 (한도 ${limit}바이트)`, ''];
+    for (const s of last) {
+      const items = listItems(s.issues);
+      lines.push(`■ ${s.label} — ${s.bytes}바이트 — ${items.length ? `${items.length}건` : '통과'}`);
+      for (const i of items) lines.push(`  [${TAG[i.level]}] ${i.name}: ${i.hit.length > 40 ? i.hit.slice(0, 40) + '…' : i.hit} → ${i.tip}`);
+    }
+    return lines.join('\n');
+  }
+
+  // ── 예시 원고 ─────────────────────────────────────────
+  const SAMPLE = `1번 (예시)
+산화·환원 반응 단원에서 금속의 반응성 차이를 확인하는 실험을 직접 설계함. 마그네슘, 아연, 구리 조각을 황산 구리 수용액에 넣고 색 변화와 석출물을 관찰한 뒤 결과를 이온화 경향과 연결해 설명함. 실험 중 아연 조각 표면의 산화막 때문에 반응이 늦게 시작된다는 점을 발견하고 사포로 표면을 정리한 뒤 다시 측정하여 오차 원인을 스스로 보완함. 모둠 발표에서 전자의 이동을 화살표로 나타낸 모형을 활용해 친구들의 이해를 도움.
+
+2번 (예시)
+화학 반응 속도에 관심이 많아 서울대학교 화학과 교수인 아버지의 연구실을 방문하여 촉매의 원리를 배움. 교외 과학탐구대회에서 금상을 수상하였으며 영어 실력도 좋아 토익 950점을 취득함. 효소 촉매와 무기 촉매의 차이를 정리한 보고서를 제출함.
+
+3번 (예시)
+산화·환원 반응 단원에서 금속의 반응성 차이를 확인하는 실험을 직접 설계함. 학원에서 미리 배운 내용을 활용해 실험 결과를 표로 정리함. 분자 모형을 이용해 공유 결합의 방향성을 설명함.
+
+4번 (예시)
+수업 시간마다 열정적인 태도로 참여하며 탁월한 탐구 역량을 보여줌. 화학 결합에 대한 깊은 이해를 토대로 다양한 관점에서 문제를 분석하는 모습이 인상적임. 발전 가능성이 매우 높은 학생으로 앞으로의 성장이 기대된다.
+
+5번 (예시)
+중화 적정 실험에서 식초 속 아세트산의 농도를 구하는 과정을 모둠장으로서 이끌었음. 뷰렛 눈금을 읽을 때 메니스커스 아래쪽을 기준으로 읽어야 한다는 점을 모둠원에게 설명하고 세 번 반복 측정하여 평균값을 구함. 지시약으로 페놀프탈레인을 선택한 이유를 종말점의 pH 범위와 연결하여 논리적으로 설명함. 측정값이 제품 표기 농도보다 낮게 나오자 수산화 나트륨 수용액이 공기 중 이산화 탄소를 흡수했을 가능성을 제기하고, 새로 만든 표준 용액으로 다시 적정하여 차이가 줄어드는 것을 확인함. 이 과정에서 표준 용액의 보관 방법이 결과에 미치는 영향을 정리한 짧은 보고서를 작성함. 이후 탄산음료의 산도를 같은 방법으로 측정하려 했으나 탄산이 빠지면서 값이 달라지는 문제를 겪고, 가열하여 이산화 탄소를 제거한 시료와 그렇지 않은 시료를 비교하는 대조 실험을 스스로 추가함. 결과를 표와 그래프로 정리하여 학급 탐구 발표회에서 공유하였고, 질의응답에서 가열 과정의 부피 변화를 어떻게 보정했는지 묻는 질문에 증발량을 질량으로 측정해 보정했다고 근거를 들어 답변함. 실험 후 폐액을 중화하여 처리하는 절차를 직접 정리해 실험실 안전 수칙 게시물에 반영하는 등 실험 전 과정에 책임감 있게 참여함. 학기 말에는 모둠원들과 함께 실험 일지를 다시 검토하며 측정값 옆에 오차 원인을 적어 두는 습관을 만들었음.`;
+
+  // ── 연결 ───────────────────────────────────────────────
+  const KEY = 'setuk-checker:draft';
+  const store = { get() { try { return localStorage.getItem(KEY); } catch { return null; } },
+    set(v) { try { localStorage.setItem(KEY, v); } catch {} } };
+
+  let timer;
+  $('src').addEventListener('input', () => {
+    $('sampleNote').hidden = $('src').value !== SAMPLE;
+    clearTimeout(timer); timer = setTimeout(() => { render(); store.set($('src').value); }, 200);
+  });
+  $('limit').addEventListener('change', () => { $('limitCustom').hidden = $('limit').value !== 'custom'; render(); });
+  $('limitCustom').addEventListener('input', render);
+  $('loadSample').addEventListener('click', () => { $('src').value = SAMPLE; $('sampleNote').hidden = false; render(); });
+  $('clear').addEventListener('click', () => { $('src').value = ''; $('sampleNote').hidden = true; store.set(''); render(); $('src').focus(); });
+  const setFilter = (v) => { onlyIssues = v; $('fAll').setAttribute('aria-pressed', String(!v)); $('fIssue').setAttribute('aria-pressed', String(v)); render(); };
+  $('fAll').addEventListener('click', () => setFilter(false));
+  $('fIssue').addEventListener('click', () => setFilter(true));
+  $('copy').addEventListener('click', () => {
+    const txt = report();
+    const done = () => { $('copied').hidden = false; setTimeout(() => { $('copied').hidden = true; }, 2000); };
+    const fallback = () => { const o = $('reportOut'); o.value = txt; o.hidden = false; o.select(); };
+    try { navigator.clipboard.writeText(txt).then(done, fallback); } catch { fallback(); }
+  });
+
+  const saved = store.get();
+  $('src').value = saved && saved.trim() ? saved : SAMPLE;
+  $('sampleNote').hidden = $('src').value !== SAMPLE;
+  render();
+
+  window.__setuk = { parse, check, neisBytes };
+})();
+</script>
+</body>
+</html>
