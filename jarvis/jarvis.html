@@ -65,6 +65,8 @@
     position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
     display: flex; gap: 8px; width: min(640px, 90vw);
   }
+  #voice { background: transparent; color: var(--cyan-dim); border: 1px solid var(--cyan-faint); font: inherit; font-size: 11px; max-width: 200px; }
+  #voice option { background: #02060c; }
   #bar input {
     flex: 1; background: rgba(2, 12, 22, .7); border: 1px solid var(--cyan-dim); color: #fff;
     padding: 10px 14px; font: inherit; font-size: 14px; outline: none;
@@ -86,7 +88,7 @@
 
 <div class="corner tl"><div id="title">J.A.R.V.I.S.</div>JUST A RATHER VERY INTELLIGENT SYSTEM<br><br>SPACE 말하기 · F 전체화면 · W 호출어 모드</div>
 <div class="corner tr"><div id="clock">--:--:--</div><div id="date"></div></div>
-<div class="corner br"><span id="model">MODEL —</span><br><a href="#" id="resetKey" style="color:inherit">API 키 변경</a></div>
+<div class="corner br"><span id="model">MODEL —</span><br><select id="voice" title="목소리"></select> · <a href="#" id="resetKey" style="color:inherit">API 키 변경</a></div>
 
 <div id="status">STANDBY</div>
 <div id="live"></div>
@@ -130,32 +132,95 @@ setInterval(() => {
 }, 250);
 
 // ───────── 음성 합성 (말하기) ─────────
+// 자비스 느낌은 "낮고 차분한 남성 집사"다. 남성 신경망 음성이 있으면 그걸 쓰고,
+// 없으면 여성 음성의 음높이를 끌어내려 최대한 가깝게 만든다.
+// 엣지(Edge)에는 남성 한국어 신경망 음성(InJoon·Hyunsu)이 기본으로 들어 있어 가장 비슷하다.
+const MALE = /InJoon|Hyunsu|인준|현수|male|남성/i;
+let voices = [];
 let voice = null;
-function pickVoice() {
-  const vs = speechSynthesis.getVoices().filter((v) => v.lang.startsWith('ko'));
-  // 구글 한국어 음성이 가장 자연스럽다. 없으면 아무 한국어 음성
-  voice = vs.find((v) => /Google/.test(v.name)) || vs[0] || null;
+
+function rankVoice(v) {
+  if (/InJoon|인준/i.test(v.name)) return 0;       // 엣지: 낮고 차분한 남성
+  if (/Hyunsu|현수/i.test(v.name)) return 1;       // 엣지: 남성 다국어
+  if (MALE.test(v.name)) return 2;
+  if (/Natural|Online/i.test(v.name)) return 3;    // 신경망 여성 음성
+  if (/Google/i.test(v.name)) return 4;
+  return 5;
 }
-speechSynthesis.onvoiceschanged = pickVoice;
-pickVoice();
+
+function loadVoices() {
+  voices = speechSynthesis.getVoices().filter((v) => v.lang.startsWith('ko'))
+    .sort((x, y) => rankVoice(x) - rankVoice(y));
+  const saved = store('voice');
+  voice = voices.find((v) => v.name === saved) || voices[0] || null;
+  const sel = $('voice');
+  sel.innerHTML = '';
+  for (const v of voices) {
+    const o = document.createElement('option');
+    o.value = v.name;
+    o.textContent = (MALE.test(v.name) ? '♂ ' : '') + v.name.replace(/Microsoft |Online \(Natural\) - |Korean|\(Korea\)|- 한국어/g, '').trim();
+    o.selected = v === voice;
+    sel.appendChild(o);
+  }
+  if (voices.length && !voices.some((v) => MALE.test(v.name)) && !store('voiceTip')) {
+    store('voiceTip', '1');
+    addLog('ai', '형님, 이 브라우저엔 남성 한국어 음성이 없습니다. 엣지(Edge)로 열면 진짜 자비스 같은 목소리가 나옵니다.');
+  }
+}
+speechSynthesis.onvoiceschanged = loadVoices;
+
+// 자비스 특유의 정제된 효과음. 음성은 WebAudio 로 못 돌리니 앞뒤 효과음으로 분위기를 낸다
+let sfxCtx = null;
+function beep(freqs, dur = 0.08, gap = 0.06, vol = 0.06) {
+  try {
+    sfxCtx = sfxCtx || new AudioContext();
+    let t = sfxCtx.currentTime;
+    for (const f of freqs) {
+      const o = sfxCtx.createOscillator(), g = sfxCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.connect(g).connect(sfxCtx.destination);
+      o.start(t); o.stop(t + dur + 0.02);
+      t += gap;
+    }
+  } catch { /* 효과음은 없어도 된다 */ }
+}
+const sfx = {
+  listen: () => beep([880, 1320], 0.09, 0.07),
+  think: () => beep([660, 990, 1320], 0.06, 0.05, 0.04),
+  done: () => beep([1320, 880], 0.09, 0.07, 0.04),
+};
+
+// 집사처럼 문장 사이를 살짝 끊어 읽는다
+function splitSentences(text) {
+  return text.split(/(?<=[.!?。…])\s+/).map((t) => t.trim()).filter(Boolean);
+}
 
 function speak(text) {
   return new Promise((resolve) => {
     speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'ko-KR';
-    if (voice) u.voice = voice;
-    u.rate = 1.05;
-    u.pitch = 0.85;
-    u.onboundary = () => { state.speakPulse = 1; };
-    u.onend = u.onerror = () => resolve();
+    const parts = splitSentences(text);
+    if (!parts.length) return resolve();
+    const male = voice && MALE.test(voice.name);
     setMode('speaking');
-    speechSynthesis.speak(u);
+    parts.forEach((part, i) => {
+      const u = new SpeechSynthesisUtterance(part);
+      u.lang = 'ko-KR';
+      if (voice) u.voice = voice;
+      u.rate = male ? 0.98 : 0.92;   // 서두르지 않는다
+      u.pitch = male ? 0.8 : 0.45;   // 여성 음성이면 크게 낮춰 중저음으로
+      u.onboundary = () => { state.speakPulse = 1; };
+      if (i === parts.length - 1) u.onend = u.onerror = () => resolve();
+      speechSynthesis.speak(u);
+    });
   });
 }
 
 // ───────── LLM (Groq 직접 호출 — 서버 없음) ─────────
-const SYSTEM = `너는 J.A.R.V.I.S. 다. 아이언맨의 AI 비서처럼 침착하고 정중하며 약간 위트 있게 말한다.
+const SYSTEM = `너는 J.A.R.V.I.S. 다. 아이언맨의 AI 집사처럼 침착하고 격식 있으며, 영국 집사 같은 건조한 위트를 가끔 섞는다.
+"알겠습니다", "확인했습니다", "말씀하신 대로" 같은 절제된 표현을 쓰고 감탄사나 호들갑은 쓰지 않는다.
 사용자를 "형님"이라고 부른다.
 답은 소리 내어 읽힌다. 그러니 마크다운·목록·이모지·코드블록을 쓰지 말고
 자연스러운 한국어 구어체 1~3문장으로 짧게 답한다. 길게 설명해 달라고 할 때만 길게 말한다.
@@ -216,6 +281,7 @@ async function ask(text) {
   addLog('user', text);
   history.push({ role: 'user', content: text });
   setMode('thinking');
+  sfx.think();
   try {
     const j = await callLLM();
     history.push({ role: 'assistant', content: j.reply });
@@ -223,6 +289,7 @@ async function ask(text) {
     addLog('ai', j.reply);
     $('live').textContent = '';
     await speak(j.reply);
+    sfx.done();
   } catch (e) {
     history.pop();
     addLog('err', e.message);
@@ -246,7 +313,7 @@ function startRecognition() {
   rec.continuous = wakeMode;
   let finalText = '';
 
-  rec.onstart = () => setMode(wakeMode && !awake ? 'idle' : 'listening');
+  rec.onstart = () => { setMode(wakeMode && !awake ? 'idle' : 'listening'); if (!wakeMode) sfx.listen(); };
   rec.onresult = (e) => {
     let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -260,6 +327,7 @@ function startRecognition() {
       if (!m) return;
       awake = true;
       setMode('listening');
+      sfx.listen();
       const rest = heard.slice(m.index + m[0].length).trim();
       finalText = '';
       if (!rest) { speechSynthesis.cancel(); $('live').textContent = '네, 형님.'; }
@@ -446,6 +514,12 @@ $('wake').addEventListener('click', () => {
   if (wakeMode) startRecognition();
 });
 
+$('voice').addEventListener('change', (e) => {
+  voice = voices.find((v) => v.name === e.target.value) || voice;
+  store('voice', voice.name);
+  speak('목소리를 변경했습니다, 형님.');
+});
+loadVoices();
 $('resetKey').addEventListener('click', (e) => { e.preventDefault(); store('groq_key', ''); models = null; getKey(); });
 setMode('idle');
 addLog('ai', '안녕하세요 형님. 코어를 클릭하거나 스페이스바를 누르고 말씀하세요.');
