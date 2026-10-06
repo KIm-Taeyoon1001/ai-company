@@ -202,7 +202,6 @@ function speak(text) {
     speechSynthesis.cancel();
     const parts = splitSentences(text);
     if (!parts.length) return resolve();
-    const male = voice && MALE.test(voice.name);
     setMode('speaking');
     parts.forEach((part, i) => {
       const u = new SpeechSynthesisUtterance(part);
