@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J.A.R.V.I.S.</title>
+<style>
+  :root {
+    --bg: #02060c;
+    --cyan: #3fe0ff;
+    --cyan-dim: rgba(63, 224, 255, .35);
+    --cyan-faint: rgba(63, 224, 255, .12);
+    --warn: #ffb84d;
+    --text: #cfefff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(ellipse at center, #06182a 0%, var(--bg) 70%);
+    color: var(--text);
+    font-family: "Consolas", "D2Coding", ui-monospace, monospace;
+    overflow: hidden;
+    user-select: none;
+  }
+  /* 화면 전체에 깔리는 스캔라인 */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(63,224,255,.03) 0 1px, transparent 1px 3px);
+  }
+  canvas#hud { position: fixed; inset: 0; width: 100%; height: 100%; cursor: pointer; }
+
+  .corner { position: fixed; font-size: 12px; letter-spacing: .15em; color: var(--cyan-dim); }
+  .tl { top: 20px; left: 24px; }
+  .tr { top: 20px; right: 24px; text-align: right; }
+    .br { bottom: 20px; right: 24px; text-align: right; }
+  #clock { font-size: 34px; color: var(--cyan); letter-spacing: .08em; text-shadow: 0 0 12px var(--cyan-dim); }
+  #title { font-size: 18px; color: var(--cyan); letter-spacing: .4em; text-shadow: 0 0 10px var(--cyan-dim); }
+
+  #status {
+    position: fixed; left: 50%; top: calc(50% + 190px); transform: translateX(-50%);
+    font-size: 14px; letter-spacing: .3em; color: var(--cyan); text-shadow: 0 0 8px var(--cyan-dim);
+    white-space: nowrap;
+  }
+  #live {
+    position: fixed; left: 50%; top: calc(50% + 220px); transform: translateX(-50%);
+    width: min(720px, 90vw); text-align: center; font-size: 18px; min-height: 28px; color: #fff;
+  }
+
+  #log {
+    position: fixed; right: 24px; top: 110px; bottom: 120px; width: min(380px, 32vw);
+    overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+    border: 1px solid var(--cyan-faint); background: rgba(2, 12, 22, .55);
+    clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+    user-select: text;
+  }
+  #log::-webkit-scrollbar { width: 4px; }
+  #log::-webkit-scrollbar-thumb { background: var(--cyan-dim); }
+  .msg { font-size: 14px; line-height: 1.55; }
+  .msg b { display: block; font-size: 11px; letter-spacing: .2em; margin-bottom: 2px; }
+  .msg.user b { color: var(--warn); }
+  .msg.ai b { color: var(--cyan); }
+  .msg.err { color: #ff6b6b; }
+
+  #bar {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+    display: flex; gap: 8px; width: min(640px, 90vw);
+  }
+  #bar input {
+    flex: 1; background: rgba(2, 12, 22, .7); border: 1px solid var(--cyan-dim); color: #fff;
+    padding: 10px 14px; font: inherit; font-size: 14px; outline: none;
+  }
+  #bar input:focus { border-color: var(--cyan); box-shadow: 0 0 10px var(--cyan-faint); }
+  #bar button {
+    background: transparent; border: 1px solid var(--cyan-dim); color: var(--cyan);
+    padding: 0 14px; font: inherit; font-size: 12px; letter-spacing: .1em; cursor: pointer;
+  }
+  #bar button:hover, #bar button.on { background: var(--cyan-faint); border-color: var(--cyan); }
+
+  @media (max-width: 800px) {
+    #log { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="hud"></canvas>
+
+<div class="corner tl"><div id="title">J.A.R.V.I.S.</div>JUST A RATHER VERY INTELLIGENT SYSTEM<br><br>SPACE 말하기 · F 전체화면 · W 호출어 모드</div>
+<div class="corner tr"><div id="clock">--:--:--</div><div id="date"></div></div>
+<div class="corner br" id="model">MODEL —</div>
+
+<div id="status">STANDBY</div>
+<div id="live"></div>
+<div id="log"></div>
+
+<form id="bar">
+  <input id="text" placeholder="입력하거나 SPACE / 코어 클릭으로 말하기" autocomplete="off">
+  <button type="button" id="wake" title="'자비스'라고 부르면 반응">WAKE</button>
+  <button type="submit">SEND</button>
+</form>
+
+<script>
+// ───────── 상태 ─────────
+const $ = (id) => document.getElementById(id);
+const state = { mode: 'idle', level: 0, speakPulse: 0 }; // idle | listening | thinking | speaking
+const history = [];
+let wakeMode = false;
+
+function setMode(mode, label) {
+  state.mode = mode;
+  $('status').textContent = label || { idle: wakeMode ? '"자비스"라고 불러주세요' : 'STANDBY',
+    listening: 'LISTENING', thinking: 'PROCESSING', speaking: 'RESPONDING' }[mode];
+}
+
+function addLog(kind, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + kind;
+  const who = { user: '형님', ai: 'JARVIS', err: 'ERROR' }[kind];
+  div.innerHTML = '<b></b><span></span>';
+  div.querySelector('b').textContent = who;
+  div.querySelector('span').textContent = text;
+  $('log').appendChild(div);
+  $('log').scrollTop = 1e9;
+}
+
+// ───────── 시계 ─────────
+setInterval(() => {
+  const d = new Date();
+  $('clock').textContent = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+  $('date').textContent = d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
+}, 250);
+
+// ───────── 음성 합성 (말하기) ─────────
+let voice = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter((v) => v.lang.startsWith('ko'));
+  // 구글 한국어 음성이 가장 자연스럽다. 없으면 아무 한국어 음성
+  voice = vs.find((v) => /Google/.test(v.name)) || vs[0] || null;
+}
+speechSynthesis.onvoiceschanged = pickVoice;
+pickVoice();
+
+function speak(text) {
+  return new Promise((resolve) => {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'ko-KR';
+    if (voice) u.voice = voice;
+    u.rate = 1.05;
+    u.pitch = 0.85;
+    u.onboundary = () => { state.speakPulse = 1; };
+    u.onend = u.onerror = () => resolve();
+    setMode('speaking');
+    speechSynthesis.speak(u);
+  });
+}
+
+// ───────── LLM ─────────
+async function ask(text) {
+  text = text.trim();
+  if (!text) return;
+  addLog('user', text);
+  history.push({ role: 'user', content: text });
+  setMode('thinking');
+  try {
+    const r = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ history }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    history.push({ role: 'assistant', content: j.reply });
+    $('model').textContent = 'MODEL ' + (j.model || '—');
+    addLog('ai', j.reply);
+    $('live').textContent = '';
+    await speak(j.reply);
+  } catch (e) {
+    history.pop();
+    addLog('err', e.message);
+    await speak('죄송합니다 형님, 서버와 연결이 원활하지 않습니다.');
+  }
+  setMode('idle');
+  if (wakeMode) startRecognition();
+}
+
+// ───────── 음성 인식 (듣기) ─────────
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+let awake = false; // 호출어 모드에서 "자비스"를 들은 뒤 명령을 기다리는 중
+
+function startRecognition() {
+  if (!SR) { addLog('err', '이 브라우저는 음성 인식을 지원하지 않습니다. 크롬을 써주세요.'); return; }
+  if (rec) return;
+  rec = new SR();
+  rec.lang = 'ko-KR';
+  rec.interimResults = true;
+  rec.continuous = wakeMode;
+  let finalText = '';
+
+  rec.onstart = () => setMode(wakeMode && !awake ? 'idle' : 'listening');
+  rec.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t; else interim += t;
+    }
+    const heard = (finalText + interim).trim();
+
+    if (wakeMode && !awake) {
+      const m = heard.match(/(자비스|쟈비스|jarvis)/i);
+      if (!m) return;
+      awake = true;
+      setMode('listening');
+      const rest = heard.slice(m.index + m[0].length).trim();
+      finalText = '';
+      if (!rest) { speechSynthesis.cancel(); $('live').textContent = '네, 형님.'; }
+      return;
+    }
+    $('live').textContent = heard;
+
+    // 호출어 모드는 연속 인식이라 문장이 끝나면 직접 끊어준다
+    if (wakeMode && awake && e.results[e.results.length - 1].isFinal && finalText.trim()) {
+      const cmd = finalText.trim();
+      finalText = '';
+      awake = false;
+      stopRecognition();
+      ask(cmd);
+    }
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed') addLog('err', '마이크 권한이 필요합니다. 주소창 왼쪽 자물쇠에서 허용해주세요.');
+    else if (e.error !== 'no-speech' && e.error !== 'aborted') addLog('err', '음성 인식 오류: ' + e.error);
+  };
+  rec.onend = () => {
+    rec = null;
+    if (!wakeMode) {
+      const t = finalText.trim();
+      if (t) ask(t); else setMode('idle');
+    } else if (state.mode === 'idle' || state.mode === 'listening') {
+      // 크롬은 연속 인식도 1분쯤 지나면 끊는다. 대기 중이면 다시 켠다
+      setTimeout(startRecognition, 300);
+    }
+  };
+  rec.start();
+}
+function stopRecognition() { if (rec) { const r = rec; rec = null; r.onend = null; r.stop(); } }
+
+function pushToTalk() {
+  if (state.mode === 'speaking') { speechSynthesis.cancel(); return; }
+  if (state.mode === 'thinking') return;
+  if (rec && !wakeMode) { rec.stop(); return; }
+  if (wakeMode) { awake = true; setMode('listening'); if (!rec) startRecognition(); return; }
+  startRecognition();
+}
+
+// ───────── 마이크 음량 → 코어 반응 ─────────
+let analyser = null;
+async function initMic() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new AudioContext();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+  } catch { /* 권한 거부 시 음량 반응만 빠진다 */ }
+}
+const buf = new Uint8Array(128);
+function micLevel() {
+  if (!analyser) return 0;
+  analyser.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (const v of buf) sum += ((v - 128) / 128) ** 2;
+  return Math.min(1, Math.sqrt(sum / buf.length) * 6);
+}
+
+// ───────── HUD 그리기 ─────────
+const cv = $('hud');
+const g = cv.getContext('2d');
+let W, H, DPR;
+function resize() {
+  DPR = devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // 상태 글씨를 HUD 바깥 눈금 바로 아래에 둔다
+  const outer = Math.min(W, H) * 0.19 * 1.55 + 24;
+  $('status').style.top = H * 0.44 + outer + 'px';
+  $('live').style.top = H * 0.44 + outer + 30 + 'px';
+}
+addEventListener('resize', resize);
+resize();
+
+const COLORS = { idle: [63, 224, 255], listening: [255, 184, 77], thinking: [160, 120, 255], speaking: [63, 224, 255] };
+let col = [...COLORS.idle];
+
+function ring(cx, cy, r, w, a0, a1, alpha) {
+  g.beginPath();
+  g.arc(cx, cy, r, a0, a1);
+  g.lineWidth = w;
+  g.strokeStyle = `rgba(${col[0]|0},${col[1]|0},${col[2]|0},${alpha})`;
+  g.stroke();
+}
+
+function frame(t) {
+  const s = t / 1000;
+  const target = COLORS[state.mode];
+  col = col.map((c, i) => c + (target[i] - c) * 0.08);
+
+  let lvl = 0;
+  if (state.mode === 'listening') lvl = micLevel();
+  if (state.mode === 'speaking') { state.speakPulse *= 0.9; lvl = 0.25 + state.speakPulse * 0.5 + Math.abs(Math.sin(s * 9)) * 0.25; }
+  if (state.mode === 'thinking') lvl = 0.3 + Math.sin(s * 6) * 0.15;
+  state.level += (lvl - state.level) * 0.25;
+
+  g.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H * 0.44;
+  const R = Math.min(W, H) * 0.19;
+  const spin = state.mode === 'thinking' ? 3 : 1;
+
+  g.shadowBlur = 18;
+  g.shadowColor = `rgba(${col[0]|0},${col[1]|0},${col[2]|0},.8)`;
+
+  // 바깥 눈금
+  for (let i = 0; i < 120; i++) {
+    const a = (i / 120) * Math.PI * 2 + s * 0.05;
+    const len = i % 10 === 0 ? 14 : 6;
+    g.beginPath();
+    g.moveTo(cx + Math.cos(a) * (R * 1.55), cy + Math.sin(a) * (R * 1.55));
+    g.lineTo(cx + Math.cos(a) * (R * 1.55 + len), cy + Math.sin(a) * (R * 1.55 + len));
+    g.lineWidth = 1;
+    g.strokeStyle = `rgba(${col[0]|0},${col[1]|0},${col[2]|0},.35)`;
+    g.stroke();
+  }
+
+  // 회전하는 호들
+  const rot = s * spin;
+  ring(cx, cy, R * 1.4, 2, rot * 0.4, rot * 0.4 + 1.2, .7);
+  ring(cx, cy, R * 1.4, 2, rot * 0.4 + 3.14, rot * 0.4 + 4.0, .7);
+  ring(cx, cy, R * 1.25, 8, -rot * 0.6, -rot * 0.6 + 0.6, .5);
+  ring(cx, cy, R * 1.25, 8, -rot * 0.6 + 2.1, -rot * 0.6 + 2.5, .5);
+  ring(cx, cy, R * 1.25, 8, -rot * 0.6 + 4.2, -rot * 0.6 + 5.0, .5);
+  ring(cx, cy, R * 1.1, 1, 0, Math.PI * 2, .25);
+
+  // 음량에 반응하는 파형 링
+  g.beginPath();
+  for (let i = 0; i <= 180; i++) {
+    const a = (i / 180) * Math.PI * 2;
+    const wave = Math.sin(a * 8 + s * 4) * Math.sin(a * 3 - s * 2);
+    const r = R * 0.95 + wave * R * 0.12 * state.level + state.level * R * 0.05;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.lineWidth = 2;
+  g.strokeStyle = `rgba(${col[0]|0},${col[1]|0},${col[2]|0},.9)`;
+  g.stroke();
+
+  // 아크 리액터 코어
+  const coreR = R * (0.55 + state.level * 0.12);
+  for (let i = 0; i < 10; i++) {
+    const a0 = (i / 10) * Math.PI * 2 + rot * 0.3;
+    ring(cx, cy, coreR, 10, a0, a0 + 0.45, .55 + state.level * .4);
+  }
+  const grad = g.createRadialGradient(cx, cy, 0, cx, cy, coreR * 0.8);
+  grad.addColorStop(0, `rgba(255,255,255,${0.85 + state.level * 0.15})`);
+  grad.addColorStop(0.35, `rgba(${col[0]|0},${col[1]|0},${col[2]|0},.6)`);
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(cx, cy, coreR * 0.8, 0, Math.PI * 2); g.fill();
+
+  g.shadowBlur = 0;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ───────── 조작 ─────────
+cv.addEventListener('click', () => { if (!analyser) initMic(); pushToTalk(); });
+addEventListener('keydown', (e) => {
+  if (document.activeElement === $('text')) return;
+  if (e.code === 'Space') { e.preventDefault(); if (!analyser) initMic(); pushToTalk(); }
+  if (e.key === 'f' || e.key === 'F') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  if (e.key === 'w' || e.key === 'W') $('wake').click();
+});
+$('bar').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const t = $('text').value;
+  $('text').value = '';
+  $('text').blur();
+  if (state.mode !== 'thinking') ask(t);
+});
+$('wake').addEventListener('click', () => {
+  wakeMode = !wakeMode;
+  awake = false;
+  $('wake').classList.toggle('on', wakeMode);
+  stopRecognition();
+  if (!analyser) initMic();
+  setMode('idle');
+  if (wakeMode) startRecognition();
+});
+
+setMode('idle');
+addLog('ai', '안녕하세요 형님. 코어를 클릭하거나 스페이스바를 누르고 말씀하세요.');
+</script>
+</body>
+</html>
