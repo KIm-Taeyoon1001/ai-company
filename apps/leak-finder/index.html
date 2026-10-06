@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>새는돈 진단</title>
+<meta name="description" content="휴대폰 요금, 인터넷 약정, 안 쓰는 구독에서 매달 새는 돈을 3분 만에 찾아 줍니다. 입력한 정보는 브라우저 밖으로 나가지 않습니다.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* 레이아웃: 휴대폰 한 손 사용 기준 한 줄 흐름. 위에 '새는 돈' 합계가 늘 보이고, 아래로 통신·인터넷·구독 순서로 점검한다 */
+:root {
+  --bg: #f2f6f5;
+  --card: #ffffff;
+  --ink: #13232a;
+  --muted: #5d6f77;
+  --line: #d8e2e1;
+  --accent: #0e6a6c;
+  --accent-soft: #dcefee;
+  --leak: #d2493f;
+  --leak-soft: #fbe5e2;
+  --save: #1d8a5a;
+  --save-soft: #dff3e8;
+  --font-body: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --font-big: "Black Han Sans", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1719; --card: #172226; --ink: #e4ecec; --muted: #94a6ab; --line: #2a393d;
+    --accent: #5cc3c4; --accent-soft: #163536; --leak: #ff8077; --leak-soft: #3a1f1d;
+    --save: #5fd39a; --save-soft: #16301f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1719; --card: #172226; --ink: #e4ecec; --muted: #94a6ab; --line: #2a393d;
+  --accent: #5cc3c4; --accent-soft: #163536; --leak: #ff8077; --leak-soft: #3a1f1d;
+  --save: #5fd39a; --save-soft: #16301f; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.6;
+  padding-inline: 16px; padding-block: 0 56px;
+}
+.wrap { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+header { padding-block: 24px 4px; }
+.logo { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--accent); font-size: 14px; letter-spacing: 0.02em; }
+.drop { width: 14px; height: 18px; background: var(--leak); border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; transform: rotate(180deg); }
+h1 { font-family: var(--font-big); font-weight: 400; font-size: clamp(28px, 7vw, 38px); line-height: 1.2; margin: 10px 0 6px; text-wrap: balance; }
+.lead { margin: 0; color: var(--muted); }
+
+.total {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--ink); color: var(--bg); border-radius: 14px; padding: 16px 18px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: end;
+}
+.total .label { font-size: 13px; opacity: 0.8; grid-column: 1 / -1; }
+.total .big { font-family: var(--font-big); font-size: clamp(34px, 9vw, 46px); line-height: 1; font-variant-numeric: tabular-nums; color: var(--save-soft); }
+.total .big small { font-size: 0.45em; margin-left: 4px; }
+.total .month { font-size: 13px; opacity: 0.85; text-align: right; font-variant-numeric: tabular-nums; }
+.example { font-size: 12.5px; color: var(--leak); background: var(--leak-soft); padding: 8px 12px; border-radius: 8px; }
+
+section.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.card h2 { margin: 0; font-size: 17px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.card h2 .step { font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 999px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > label, .field > .q { font-size: 14px; font-weight: 500; }
+.field .sub { font-size: 12.5px; color: var(--muted); }
+.row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 420px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+input[type=number], select {
+  font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.won { position: relative; }
+.won input { padding-right: 34px; }
+.won::after { content: "원"; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 14px; pointer-events: none; }
+.choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.choices label {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; font-size: 14px; background: var(--card);
+}
+.choices input { position: absolute; opacity: 0; pointer-events: none; }
+.choices label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.choices label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.subs { display: flex; flex-direction: column; gap: 8px; }
+.sub-row { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.sub-row .name { font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sub-row .name input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.sub-row input[type=number] { padding: 6px 8px; font-size: 14px; }
+.sub-row .used { font-size: 12.5px; display: flex; align-items: center; gap: 4px; color: var(--muted); white-space: nowrap; }
+.sub-row .used input { accent-color: var(--accent); }
+.sub-row.off { opacity: 0.55; }
+@media (max-width: 420px) { .sub-row { grid-template-columns: minmax(0, 1fr) 96px; } .sub-row .used { grid-column: 1 / -1; } }
+
+.results { display: flex; flex-direction: column; gap: 10px; }
+.act { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--card); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; }
+.act.top { border-color: var(--save); box-shadow: 0 0 0 1px var(--save) inset; }
+.act h3 { margin: 0; font-size: 15px; }
+.act .amt { font-weight: 700; color: var(--save); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.act .amt.check { color: var(--accent); }
+.act p { margin: 0; grid-column: 1 / -1; font-size: 13.5px; color: var(--muted); }
+.act ol { margin: 4px 0 0; padding-left: 20px; grid-column: 1 / -1; font-size: 13.5px; display: flex; flex-direction: column; gap: 2px; }
+.act a { color: var(--accent); font-weight: 500; }
+.warn { grid-column: 1 / -1; font-size: 12.5px; color: var(--leak); }
+
+.share { display: flex; flex-direction: column; gap: 10px; background: var(--accent-soft); border-radius: 14px; padding: 16px 18px; }
+.share p { margin: 0; font-size: 14px; }
+button {
+  font: inherit; font-weight: 700; font-size: 15px; cursor: pointer; border: 0; border-radius: 10px;
+  padding: 12px 16px; background: var(--accent); color: var(--card);
+}
+button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.msg { font-size: 13px; color: var(--save); }
+#shareText { width: 100%; min-height: 80px; font: inherit; font-size: 14px; border-radius: 10px; border: 1px solid var(--line); padding: 10px; background: var(--card); color: var(--ink); }
+footer { font-size: 12px; color: var(--muted); }
+footer p { margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><span class="drop" aria-hidden="true"></span>새는돈</div>
+    <h1>매달 새는 돈, 3분이면 찾습니다</h1>
+    <p class="lead">휴대폰 요금, 인터넷 약정, 안 쓰는 구독을 점검합니다. 입력한 정보는 이 브라우저 밖으로 나가지 않습니다.</p>
+  </header>
+
+  <div class="total" aria-live="polite">
+    <span class="label">1년 동안 아낄 수 있는 돈</span>
+    <span class="big" id="yearTotal">0<small>원</small></span>
+    <span class="month" id="monthTotal">한 달 0원</span>
+  </div>
+  <div class="example" id="exampleNote">지금 숫자는 예시입니다. 내 고지서를 보고 값을 바꿔 보세요.</div>
+
+  <section class="card" aria-labelledby="h-mobile">
+    <h2 id="h-mobile"><span class="step">1</span>휴대폰 요금</h2>
+    <div class="row2">
+      <div class="field">
+        <label for="plan">요금제 월정액 (할인 전)</label>
+        <div class="won"><input type="number" id="plan" inputmode="numeric" min="0" step="1000" value="69000"></div>
+        <span class="sub">고지서의 '월정액' 또는 요금제 이름 옆 금액</span>
+      </div>
+      <div class="field">
+        <label for="lines">같은 요금제 회선 수</label>
+        <select id="lines">
+          <option value="1">나 혼자 (1회선)</option>
+          <option value="2">2회선</option>
+          <option value="3">3회선</option>
+          <option value="4">4회선</option>
+        </select>
+        <span class="sub">가족 휴대폰도 같은 상황이면 늘리세요</span>
+      </div>
+    </div>
+    <div class="field">
+      <span class="q" id="q-contract">지금 약정 상태는?</span>
+      <div class="choices" role="radiogroup" aria-labelledby="q-contract">
+        <label><input type="radio" name="contract" value="none" checked>약정 끝남 / 자급제</label>
+        <label><input type="radio" name="contract" value="selective">25% 할인 받는 중</label>
+        <label><input type="radio" name="contract" value="subsidy">공시지원금 약정 중</label>
+        <label><input type="radio" name="contract" value="unknown">모름</label>
+      </div>
+      <span class="sub">휴대폰을 2년 넘게 썼다면 대부분 '약정 끝남'입니다</span>
+    </div>
+    <div class="field">
+      <span class="q" id="q-data">한 달 데이터 사용량</span>
+      <div class="choices" role="radiogroup" aria-labelledby="q-data">
+        <label><input type="radio" name="data" value="3">3GB 이하</label>
+        <label><input type="radio" name="data" value="7">7GB 이하</label>
+        <label><input type="radio" name="data" value="15" checked>15GB 이하</label>
+        <label><input type="radio" name="data" value="100">100GB 이하</label>
+        <label><input type="radio" name="data" value="999">무제한 필요</label>
+      </div>
+      <span class="sub">휴대폰 설정 → 데이터 사용량에서 지난달 값을 볼 수 있습니다</span>
+    </div>
+    <div class="field">
+      <span class="q" id="q-bundle">가족결합이나 인터넷 결합 할인을 받고 있나요?</span>
+      <div class="choices" role="radiogroup" aria-labelledby="q-bundle">
+        <label><input type="radio" name="bundle" value="no" checked>아니요</label>
+        <label><input type="radio" name="bundle" value="yes">네</label>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="h-net">
+    <h2 id="h-net"><span class="step">2</span>집 인터넷</h2>
+    <div class="field">
+      <span class="q" id="q-net">인터넷 약정은?</span>
+      <div class="choices" role="radiogroup" aria-labelledby="q-net">
+        <label><input type="radio" name="net" value="ended" checked>3년 넘게 씀 / 약정 끝남</label>
+        <label><input type="radio" name="net" value="active">약정 남아 있음</label>
+        <label><input type="radio" name="net" value="unknown">모름</label>
+        <label><input type="radio" name="net" value="none">안 씀</label>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="h-subs">
+    <h2 id="h-subs"><span class="step">3</span>정기 구독</h2>
+    <p class="sub" style="margin:0">내는 구독에 체크하고, 지난 한 달 동안 안 썼으면 '썼음'을 끄세요. 금액은 내 결제 금액으로 고칠 수 있습니다.</p>
+    <div class="subs" id="subs"></div>
+  </section>
+
+  <h2 style="margin:8px 0 0;font-size:18px">이렇게 하면 아낍니다</h2>
+  <div class="results" id="results"></div>
+
+  <div class="share">
+    <p id="shareLine">결과를 친구나 가족에게 보내 보세요. 부모님 휴대폰 요금이 가장 많이 샙니다.</p>
+    <div class="btns">
+      <button type="button" id="copyShare">결과 문구 복사</button>
+      <button type="button" class="ghost" id="reset">처음부터 다시</button>
+    </div>
+    <span class="msg" id="copyMsg" hidden>복사했습니다. 카톡에 붙여넣으세요.</span>
+    <textarea id="shareText" readonly hidden aria-label="공유 문구"></textarea>
+  </div>
+
+  <footer>
+    <p>알뜰폰 요금은 2026년 10월 기준 같은 데이터량 요금제의 대략적인 시세이며 프로모션에 따라 달라집니다. 인터넷 재약정 할인은 통신사와 상품마다 달라 추정치로 계산합니다.</p>
+    <p>이 서비스는 대신 신청하거나 해지하지 않습니다. 각 단계의 공식 경로를 안내합니다.</p>
+  </footer>
+</div>
+
+<script>
+(() => {
+  // 같은 데이터량 알뜰폰 요금 시세 (월, 원) — 보수적으로 잡은 값
+  const MVNO = { 3: 6000, 7: 9900, 15: 16500, 100: 27500, 999: 33000 };
+  const MVNO_LABEL = { 3: '3GB', 7: '7GB', 15: '15GB', 100: '100GB', 999: '무제한' };
+  const NET_RECONTRACT = 5500; // 인터넷 재약정 월 할인 추정
+  const SUBS = [
+    { id: 'netflix', name: '넷플릭스', price: 13500 },
+    { id: 'youtube', name: '유튜브 프리미엄', price: 14900 },
+    { id: 'tving', name: '티빙', price: 9500 },
+    { id: 'coupang', name: '쿠팡 와우', price: 7890 },
+    { id: 'naver', name: '네이버플러스 멤버십', price: 4900 },
+    { id: 'disney', name: '디즈니+', price: 9900 },
+    { id: 'music', name: '음원 (멜론·지니 등)', price: 10900 },
+    { id: 'ai', name: 'AI 구독 (ChatGPT 등)', price: 29000 },
+    { id: 'extra', name: '휴대폰 부가서비스 (컬러링·보험 등)', price: 5500 },
+  ];
+  // 예시 상태: 넷플릭스·유튜브·쿠팡 사용, 티빙은 결제만 하고 안 씀
+  const EXAMPLE = { netflix: [true, true], youtube: [true, true], tving: [true, false], coupang: [true, true], extra: [true, false] };
+
+  const $ = (id) => document.getElementById(id);
+  const won = (n) => Math.round(n).toLocaleString('ko-KR') + '원';
+  const radio = (name) => document.querySelector(`input[name="${name}"]:checked`).value;
+  let touched = false;
+
+  function buildSubs() {
+    $('subs').innerHTML = SUBS.map((s) => {
+      const [on, used] = EXAMPLE[s.id] || [false, true];
+      return `<div class="sub-row ${on ? '' : 'off'}" data-id="${s.id}">
+        <label class="name"><input type="checkbox" id="on-${s.id}" ${on ? 'checked' : ''}>${s.name}</label>
+        <div class="won"><input type="number" id="price-${s.id}" inputmode="numeric" min="0" step="100" value="${s.price}" aria-label="${s.name} 월 금액"></div>
+        <label class="used"><input type="checkbox" id="used-${s.id}" ${used ? 'checked' : ''}>썼음</label>
+      </div>`;
+    }).join('');
+  }
+
+  function compute() {
+    const P = Math.max(0, +$('plan').value || 0);
+    const lines = +$('lines').value;
+    const contract = radio('contract');
+    const tier = +radio('data');
+    const bundle = radio('bundle') === 'yes';
+    const net = radio('net');
+    const acts = [];
+
+    // 1. 휴대폰: 선택약정 25%와 알뜰폰 전환 중 큰 쪽을 추천, 작은 쪽은 대안으로
+    const canSelective = contract === 'none' || contract === 'unknown';
+    const selSave = canSelective ? P * 0.25 : 0;
+    const nowPay = contract === 'selective' ? P * 0.75 : P;
+    const mvnoPrice = MVNO[tier];
+    const mvnoSave = contract === 'subsidy' ? 0 : Math.max(0, (canSelective ? P : nowPay) - mvnoPrice);
+
+    const selAct = {
+      key: 'sel', month: selSave * lines, check: contract === 'unknown',
+      title: '선택약정 25% 할인 신청',
+      body: contract === 'unknown' ? '약정이 끝났다면 바로 받을 수 있는 할인입니다. 대상인지 먼저 조회하세요.' : '약정이 끝났는데 할인을 안 받고 있습니다. 전국 1,230만 명이 이 할인을 놓치고 있습니다.',
+      steps: ['<a href="https://wiseuser.go.kr/application.do?boardtypecode=5360" target="_blank" rel="noopener">와이즈유저</a>에서 25% 할인 대상인지 조회', '통신사 앱이나 114에 전화해 "선택약정 12개월로 신청"이라고 말하기', '12개월로 하면 중간에 바꿀 때 위약금이 적습니다'],
+    };
+    const mvnoAct = {
+      key: 'mvno', month: mvnoSave * lines,
+      title: `알뜰폰 ${MVNO_LABEL[tier]} 요금제로 갈아타기`,
+      body: `같은 통신망을 쓰는 알뜰폰은 비슷한 요금제가 월 ${won(mvnoPrice)} 안팎입니다. 번호와 휴대폰은 그대로 씁니다.`,
+      steps: ['<a href="https://www.mvnohub.kr" target="_blank" rel="noopener">알뜰폰허브</a>에서 데이터량으로 요금제 비교', '유심 또는 eSIM을 받아 번호이동 신청 (보통 하루 안에 끝남)'],
+      warn: bundle ? '가족결합·인터넷 결합 할인이 사라집니다. 그 할인액을 빼고 비교하세요.' : '',
+    };
+    if (contract === 'subsidy') {
+      acts.push({ key: 'sub', month: 0, check: true, title: '공시지원금 약정이 끝나는 날 확인', body: '지금 바꾸면 위약금이 나옵니다. 약정 끝나는 날을 달력에 적어 두고, 그날 25% 할인이나 알뜰폰으로 바꾸세요.', steps: ['통신사 앱 → 가입 정보에서 약정 만료일 확인'] });
+    } else if (mvnoSave > selSave) {
+      acts.push(mvnoAct);
+      if (selSave > 0) acts.push({ ...selAct, alt: true, title: '알뜰폰이 번거롭다면: 선택약정 25% 할인 신청', body: '통신사를 그대로 두고 받는 할인입니다. 알뜰폰보다는 적지만 전화 한 통이면 끝납니다.' });
+    } else if (selSave > 0) {
+      acts.push(selAct);
+    }
+
+    // 2. 통신 미환급금: 금액은 알 수 없지만 누구에게나 확인할 가치가 있다
+    acts.push({ key: 'refund', month: 0, check: true, title: '통신 미환급금 조회', body: '해지한 휴대폰·인터넷에서 돌려받지 못한 돈이 남아 있을 수 있습니다.', steps: ['<a href="https://www.smartchoice.or.kr" target="_blank" rel="noopener">스마트초이스</a> → 통신 미환급금 조회에서 본인 인증'] });
+
+    // 3. 인터넷
+    if (net === 'ended' || net === 'unknown') {
+      acts.push({ key: 'net', month: net === 'ended' ? NET_RECONTRACT : 0, check: net === 'unknown', title: '인터넷 재약정 할인 받기',
+        body: net === 'ended' ? '약정이 끝난 뒤에도 같은 요금을 내고 있을 가능성이 큽니다. 재약정만 해도 요금이 내려갑니다(금액은 추정).' : '3년 약정이 끝났는지 먼저 확인하세요. 끝났다면 재약정 할인이나 갈아타기 사은품을 받을 수 있습니다.',
+        steps: ['인터넷 통신사 고객센터에 "약정 만료됐는데 재약정 할인 받고 싶다"고 요청', '다른 통신사 신규 가입 사은품과 비교해 큰 쪽으로'] });
+    }
+
+    // 4. 안 쓰는 구독
+    for (const s of SUBS) {
+      const on = $(`on-${s.id}`).checked, used = $(`used-${s.id}`).checked;
+      document.querySelector(`.sub-row[data-id="${s.id}"]`).classList.toggle('off', !on);
+      const price = Math.max(0, +$(`price-${s.id}`).value || 0);
+      if (on && !used && price > 0) {
+        acts.push({ key: s.id, month: price, title: `${s.name} 해지`, body: '지난 한 달 동안 안 썼는데 결제되고 있습니다. 다음 결제일 전에 해지하면 다음 달부터 안 나갑니다.', steps: ['결제한 곳(앱스토어·카드·통신사)에서 정기결제 해지'] });
+      }
+    }
+    return acts;
+  }
+
+  function render() {
+    const acts = compute();
+    const month = acts.filter((a) => !a.alt).reduce((n, a) => n + a.month, 0);
+    $('yearTotal').innerHTML = `${(month * 12).toLocaleString('ko-KR')}<small>원</small>`;
+    $('monthTotal').textContent = `한 달 ${won(month)}`;
+    const sorted = [...acts].sort((a, b) => (b.alt ? -1 : b.month) - (a.alt ? -1 : a.month));
+    const topKey = sorted.find((a) => a.month > 0 && !a.alt)?.key;
+    $('results').innerHTML = sorted.map((a) => `
+      <article class="act ${a.key === topKey ? 'top' : ''}">
+        <h3>${a.title}</h3>
+        <span class="amt ${a.month > 0 ? '' : 'check'}">${a.month > 0 ? `월 ${won(a.month)}` : '확인 필요'}</span>
+        <p>${a.body}</p>
+        ${a.steps ? `<ol>${a.steps.map((s) => `<li>${s}</li>`).join('')}</ol>` : ''}
+        ${a.warn ? `<span class="warn">${a.warn}</span>` : ''}
+      </article>`).join('');
+    const yr = month * 12;
+    $('shareLine').textContent = yr > 0
+      ? `1년에 ${won(yr)}이 새고 있었습니다. 결과를 가족에게도 보내 보세요. 부모님 휴대폰 요금이 가장 많이 샙니다.`
+      : '지금은 새는 돈이 보이지 않습니다. 부모님 휴대폰 요금도 점검해 보세요.';
+    $('exampleNote').hidden = touched;
+    return yr;
+  }
+
+  function shareText() {
+    const yr = render();
+    const top = compute().filter((a) => a.month > 0 && !a.alt).sort((a, b) => b.month - a.month).slice(0, 3);
+    return [`새는돈 진단해 보니 1년에 ${won(yr)} 아낄 수 있대.`, ...top.map((a) => `- ${a.title}: 월 ${won(a.month)}`), '3분이면 됨. 너도 해 봐.', location.href.startsWith('http') ? location.href : ''].filter(Boolean).join('\n');
+  }
+
+  buildSubs();
+  document.addEventListener('input', () => { touched = true; render(); });
+  document.addEventListener('change', () => { touched = true; render(); });
+  $('copyShare').addEventListener('click', () => {
+    const txt = shareText();
+    const ok = () => { $('copyMsg').hidden = false; setTimeout(() => { $('copyMsg').hidden = true; }, 2500); };
+    const fallback = () => { $('shareText').value = txt; $('shareText').hidden = false; $('shareText').select(); };
+    try { navigator.clipboard.writeText(txt).then(ok, fallback); } catch { fallback(); }
+  });
+  $('reset').addEventListener('click', () => {
+    $('plan').value = 69000; $('lines').value = '1';
+    for (const [n, v] of [['contract', 'none'], ['data', '15'], ['bundle', 'no'], ['net', 'ended']]) document.querySelector(`input[name="${n}"][value="${v}"]`).checked = true;
+    buildSubs(); touched = false; $('shareText').hidden = true; render(); window.scrollTo({ top: 0 });
+  });
+  render();
+  window.__leak = { compute };
+})();
+</script>
+</body>
+</html>
