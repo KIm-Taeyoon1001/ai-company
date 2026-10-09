@@ -44,18 +44,18 @@ const [A, B, C, D, E, Z, Y] = await Promise.all(["a", "b", "c", "d", "e", "z", "
 
 // --- 가입 검증
 await assert.rejects(join(Y, "어린이", "3", { birthDate: "2015-01-01" }), /만 14세/);
-await assert.rejects(join(Y, "ㅅㅂ왕"), /닉네임/);
-await assert.rejects(join(Y, "정상닉", "3", { birthDate: "2011-02-30" }), /생년월일/);
-step("14세 미만·금칙어·없는 날짜 차단");
+await assert.rejects(join(Y, "김철수바보"), /닉네임/);
+await assert.rejects(join(Y, "용감한고양이01", "3", { birthDate: "2011-02-30" }), /생년월일/);
+step("14세 미만·프리셋 외 닉네임·없는 날짜 차단");
 
-const r1 = await join(A, "에이");
+const r1 = await join(A, "용감한고양이01");
 assert.equal(r1.status, "verified");
 const classId = r1.classId;
 assert.equal((await user(A.uid)).cash, 10000);
 step("개설자 자동 인증 + 10,000 코인");
 
-for (const [u, n] of [[B, "비"], [C, "씨"], [D, "디"], [E, "이"]]) assert.equal((await join(u, n + "닉")).status, "pending");
-await assert.rejects(join(A, "에이"), /이미/);
+for (const [u, n] of [[B, "졸린판다02"], [C, "신난수달03"], [D, "빠른여우04"], [E, "멋진고래05"]]) assert.equal((await join(u, n)).status, "pending");
+await assert.rejects(join(A, "용감한고양이01"), /이미/);
 
 const pending = await call(A, "listPending");
 assert.equal(pending.pending.length, 4);
@@ -63,12 +63,12 @@ assert.ok(pending.pending.every((p) => p.nickname && p.uid));
 step("승인 대기 목록은 닉네임만");
 
 // 승인 대기 중엔 반을 바꿀 수 있다
-assert.equal((await join(E, "이닉", "4")).status, "verified"); // 4반 개설자가 됨
-await assert.rejects(join(E, "이닉", "3"), /이미 정해/);
+assert.equal((await join(E, "멋진고래05", "4")).status, "verified"); // 4반 개설자가 됨
+await assert.rejects(join(E, "멋진고래05", "3"), /이미 정해/);
 step("대기 중 반 변경 가능, 인증 후 1년 고정");
 
 const [F] = await Promise.all([signUp("f@t.com")]);
-await join(F, "에프");
+await join(F, "귀여운쿼카06");
 
 await call(A, "approveMember", { targetUid: B.uid }); // count 1 → 1명 필요
 assert.equal((await user(B.uid)).status, "verified");
@@ -94,7 +94,7 @@ await call(C, "checkin");
 step("출석 하루 1회");
 
 // --- 매매
-const z = await call(Z, "joinClass", { nickname: "제트", birthDate: "2009-01-01", officeCode: "H10", schoolCode: "7480002", grade: "1", classNm: "1" });
+const z = await call(Z, "joinClass", { nickname: "날쌘치타07", birthDate: "2009-01-01", officeCode: "H10", schoolCode: "7480002", grade: "1", classNm: "1" });
 assert.equal(z.status, "verified");
 await assert.rejects(call(Z, "trade", { classId: z.classId, side: "buy", qty: 1 }), /상장되지/);
 await assert.rejects(call(Y, "trade", { classId, side: "buy", qty: 1 }), /인증/);
@@ -103,20 +103,21 @@ await assert.rejects(call(A, "trade", { classId, side: "buy", qty: 31 }), /30주
 step("미상장·미인증·수량·우리 반 30주 한도 차단");
 
 const before = (await cls(classId)).price;
-// 시작 코인 10,000 / 공모가 1,000 → 한 번에 살 수 있는 건 9주 남짓
-await assert.rejects(call(Z, "trade", { classId, side: "buy", qty: 11 }), /코인이 부족/);
-const buy = await call(Z, "trade", { classId, side: "buy", qty: 9 });
-assert.ok(buy.price > before);
-assert.equal(buy.qty, 9);
-const sell = await call(Z, "trade", { classId, side: "sell", qty: 9 });
+// 시작 코인 10,000 / 공모가 100 → 한 번에 95주 가까이 살 수 있고 주가가 눈에 띄게 움직인다
+const buy = await call(Z, "trade", { classId, side: "buy", qty: 90 });
+assert.ok(buy.price >= before * 1.044, `90주 매수 → +4.5%: ${buy.price}`);
+assert.equal(buy.qty, 90);
+await assert.rejects(call(Z, "trade", { classId, side: "buy", qty: 9 }), /코인이 부족/);
+const sell = await call(Z, "trade", { classId, side: "sell", qty: 90 });
 assert.ok(sell.cash < 10000, `왕복 매매 후 손해여야 함: ${sell.cash}`);
 assert.equal((await db.doc(`holdings/${Z.uid}_${classId}`).get()).exists, false);
 await assert.rejects(call(Z, "trade", { classId, side: "sell", qty: 1 }), /부족/);
 step(`매수 시 가격 상승, 사고 바로 팔면 손해 (잔고 ${sell.cash})`);
 
-await call(A, "trade", { classId, side: "buy", qty: 8 });
-await call(Z, "trade", { classId, side: "buy", qty: 5 });
-for (let i = 0; i < 10; i++) await call(Z, "trade", { classId, side: "buy", qty: 1 }).catch(() => {});
+// 우리 반 30주 + 다른 반 사람들이 몰리면 상한가에서 멈춘다
+await call(A, "trade", { classId, side: "buy", qty: 30 });
+for (const u of [B, C, D]) await call(u, "trade", { classId, side: "buy", qty: 30 });
+await call(Z, "trade", { classId, side: "buy", qty: 90 });
 const after = await cls(classId);
 assert.ok(after.price <= after.prevClose * 1.3 + 0.01);
 assert.ok(Math.abs(after.change - (after.price / after.prevClose - 1)) < 0.0002);
@@ -138,7 +139,7 @@ step(`마감: 종가·활동 점수(${closed.activity})·랭킹(uid 비공개)`)
 const pBefore = closed.price;
 await fns.tick.run({});
 const ticked = await cls(classId);
-const fv = 1000 * (0.5 + closed.activity / 100);
+const fv = 100 * (0.5 + closed.activity / 100);
 assert.ok(Math.abs(ticked.price - (pBefore + 0.05 * (fv - pBefore))) < 0.02, `${ticked.price}`);
 step(`tick: ${pBefore} → ${ticked.price} (내재가치 ${fv})`);
 

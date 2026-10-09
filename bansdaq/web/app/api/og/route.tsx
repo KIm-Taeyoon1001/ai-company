@@ -16,7 +16,7 @@ async function readClass(id: string) {
   const { fields } = (await res.json()) as { fields: Record<string, FsValue> };
   const s = (k: string) => fields[k]?.stringValue ?? "";
   const n = (k: string) => Number(fields[k]?.doubleValue ?? fields[k]?.integerValue ?? 0);
-  return { schoolName: s("schoolName"), grade: s("grade"), classNm: s("classNm"), price: n("price"), prevClose: n("prevClose") || 1000, listed: fields.listed?.booleanValue === true };
+  return { schoolName: s("schoolName"), grade: s("grade"), classNm: s("classNm"), price: n("price"), prevClose: n("prevClose") || 100, listed: fields.listed?.booleanValue === true };
 }
 
 async function font(text: string) {

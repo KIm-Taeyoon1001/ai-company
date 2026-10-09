@@ -7,7 +7,7 @@ import SchoolSearch from "@/components/SchoolSearch";
 import { Button, ErrorBanner } from "@/components/ui";
 import { call, errMsg, fb } from "@/lib/firebase";
 import { useMe } from "@/lib/hooks";
-import { ageFrom, validBirthDate, validNickname, MIN_AGE, schoolYear } from "@/lib/engine";
+import { ageFrom, validBirthDate, validNickname, makeNickname, MIN_AGE, NICK_ADJ, NICK_NOUN, schoolYear } from "@/lib/engine";
 import type { School } from "@/lib/types";
 
 export default function JoinPage() {
@@ -29,7 +29,11 @@ function Join() {
   const [classNm, setClassNm] = useState(sp.get("c") ?? "");
   const [classes, setClasses] = useState<string[]>([]);
   const [birth, setBirth] = useState("");
-  const [nickname, setNickname] = useState("");
+  // 닉네임은 프리셋 조합만. 처음엔 무작위로 하나 골라 둔다
+  const [adj, setAdj] = useState<string>(() => pick(NICK_ADJ));
+  const [noun, setNoun] = useState<string>(() => pick(NICK_NOUN));
+  const [num, setNum] = useState(() => Math.floor(Math.random() * 100));
+  const nickname = makeNickname(adj, noun, num);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,7 +62,7 @@ function Join() {
     setError(null);
     try {
       await call("joinClass", {
-        nickname: nickname.trim(), birthDate: birth,
+        nickname, birthDate: birth,
         officeCode: school.officeCode, schoolCode: school.schoolCode, grade, classNm,
       });
       router.replace("/class");
@@ -131,11 +135,24 @@ function Join() {
 
       {birthOk && school && grade && classNm && (
         <Step n={5} title="닉네임">
-          <input value={nickname} onChange={(e) => setNickname(e.target.value)} maxLength={12}
-            placeholder="한글·영문·숫자 2~12자" className="w-full rounded-2xl bg-card px-5 py-4 text-base outline-none" />
-          <p className="mt-2 text-xs text-sub">랭킹에 공개돼요. 실명은 쓰지 마세요.</p>
+          <div className="flex items-center justify-between rounded-2xl bg-card px-5 py-4">
+            <span className="text-lg font-bold">{nickname}</span>
+            <button className="text-sm font-semibold text-brand"
+              onClick={() => { setAdj(pick(NICK_ADJ)); setNoun(pick(NICK_NOUN)); setNum(Math.floor(Math.random() * 100)); }}>
+              🎲 랜덤
+            </button>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <select value={adj} onChange={(e) => setAdj(e.target.value)} className="rounded-xl bg-card px-3 py-3 outline-none">
+              {NICK_ADJ.map((a) => <option key={a}>{a}</option>)}
+            </select>
+            <select value={noun} onChange={(e) => setNoun(e.target.value)} className="rounded-xl bg-card px-3 py-3 outline-none">
+              {NICK_NOUN.map((n) => <option key={n}>{n}</option>)}
+            </select>
+          </div>
+          <p className="mt-2 text-xs text-sub">랭킹에 공개돼요. 놀림에 쓰이지 않게 정해진 단어만 고를 수 있어요.</p>
           <ErrorBanner msg={error} />
-          <Button className="mt-6" disabled={busy || !validNickname(nickname.trim())} onClick={submit}>
+          <Button className="mt-6" disabled={busy || !validNickname(nickname)} onClick={submit}>
             {busy ? "확인 중…" : "참여하기"}
           </Button>
         </Step>
@@ -143,6 +160,10 @@ function Join() {
       {!(birthOk && school && grade && classNm) && <ErrorBanner msg={error} />}
     </div>
   );
+}
+
+function pick<T>(list: readonly T[]): T {
+  return list[Math.floor(Math.random() * list.length)];
 }
 
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {

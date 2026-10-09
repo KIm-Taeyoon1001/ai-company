@@ -22,7 +22,7 @@ export default function Market() {
   const { me } = useMe();
   const now = useNow();
   const [tab, setTab] = useState<Tab>("top");
-  // 각 페이지 시작 직전의 [정렬값, 문서ID]. 공모가 1000 처럼 같은 값이 많아 ID 로 순서를 확정한다
+  // 각 페이지 시작 직전의 [정렬값, 문서ID]. 공모가 100 처럼 같은 값이 많아 ID 로 순서를 확정한다
   const [cursors, setCursors] = useState<[number, string][]>([]);
 
   const school = me?.schoolCode;

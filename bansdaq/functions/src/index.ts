@@ -69,7 +69,7 @@ export const joinClass = onCall({ region: REGION, secrets: [NEIS_KEY] }, async (
 
   if (!E.validBirthDate(birthDate)) throw new HttpsError("invalid-argument", "생년월일 형식이 잘못됐습니다.");
   if (E.ageFrom(birthDate) < E.MIN_AGE) throw new HttpsError("permission-denied", "만 14세 이상만 가입할 수 있습니다.");
-  if (!E.validNickname(nickname)) throw new HttpsError("invalid-argument", "닉네임은 한글·영문·숫자 2~12자입니다.");
+  if (!E.validNickname(nickname)) throw new HttpsError("invalid-argument", "닉네임은 주어진 단어 중에서 골라야 합니다.");
   if (!/^[A-Z0-9]{2,10}$/.test(officeCode) || !/^\d{5,10}$/.test(schoolCode) || !/^[1-3]$/.test(grade) || !/^[^/_]{1,10}$/.test(classNm)) {
     throw new HttpsError("invalid-argument", "학교와 반을 선택하세요.");
   }

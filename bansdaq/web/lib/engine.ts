@@ -4,7 +4,9 @@
 export const START_CASH = 10000;
 export const CHECKIN_REWARD = 500;
 export const SHARES_PER_CLASS = 1000;
-export const IPO_PRICE = 1000;
+// 공모가 100: 시작 코인 10,000 으로 100주를 살 수 있어 보유 한도(100주·우리 반 30주)가 실제로 의미를 갖는다.
+// 가격 충격은 수량에만 비례(1주 0.05%)하므로 100주 매수 = +5%, 6명이 몰리면 상한가.
+export const IPO_PRICE = 100;
 export const LIST_MIN_MEMBERS = 5;
 export const FEE_RATE = 0.005;
 export const IMPACT = 0.5;
@@ -101,12 +103,25 @@ export function changeRate(price: number, prevClose: number): number {
   return Math.round((price / prevClose - 1) * 10000) / 10000;
 }
 
-// 닉네임은 랭킹에 공개된다. 형식 제한 + 최소한의 금칙어. 운영하며 목록을 늘린다.
-const NICK_RE = /^[가-힣a-zA-Z0-9_]{2,12}$/;
-const BANNED = ["시발", "씨발", "병신", "ㅅㅂ", "ㅂㅅ", "좆", "새끼", "fuck", "shit", "admin", "운영자", "관리자"];
+// 닉네임은 랭킹에 공개되므로 자유 입력을 받지 않는다. 프리셋 형용사 + 명사 조합만 허용.
+// 친구 실명을 넣어 놀리는 용도로 쓸 수 없게 하는 것이 목적이다.
+export const NICK_ADJ = [
+  "용감한", "졸린", "배고픈", "신난", "느긋한", "빠른", "수상한", "반짝이는", "조용한", "엉뚱한",
+  "똑똑한", "부지런한", "멋진", "귀여운", "씩씩한", "행복한", "든든한", "날쌘", "포근한", "당당한",
+] as const;
+export const NICK_NOUN = [
+  "고양이", "강아지", "판다", "펭귄", "수달", "햄스터", "여우", "부엉이", "돌고래", "다람쥐",
+  "호랑이", "토끼", "고래", "너구리", "알파카", "쿼카", "곰돌이", "병아리", "치타", "거북이",
+] as const;
 
+export function makeNickname(adj: string, noun: string, num: number): string {
+  return `${adj}${noun}${String(num).padStart(2, "0")}`;
+}
+
+/** 형용사 + 명사 + 두 자리 숫자(00~99). 같은 닉네임이 겹쳐도 숫자로 구분된다. */
 export function validNickname(s: string): boolean {
-  if (!NICK_RE.test(s)) return false;
-  const low = s.toLowerCase();
-  return !BANNED.some((w) => low.includes(w));
+  const m = /^(.+?)(\d{2})$/.exec(s);
+  if (!m) return false;
+  const body = m[1];
+  return NICK_ADJ.some((a) => body.startsWith(a) && (NICK_NOUN as readonly string[]).includes(body.slice(a.length)));
 }

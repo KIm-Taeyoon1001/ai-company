@@ -36,25 +36,25 @@ test("나이 계산과 생일 검증", () => {
 
 test("사고 바로 팔면 손해 (수수료 전에도 차익 없음)", () => {
   for (const q of [1, 10, 50, 100]) {
-    const b = E.quote(1000, 1000, "buy", q);
-    const s = E.quote(b.newP, 1000, "sell", q);
+    const b = E.quote(E.IPO_PRICE, E.IPO_PRICE, "buy", q);
+    const s = E.quote(b.newP, E.IPO_PRICE, "sell", q);
     assert.ok(b.cashDelta + s.cashDelta < 0, `qty ${q}`);
     assert.ok(s.exec <= b.exec, `qty ${q}`);
   }
 });
 
 test("상·하한가 ±30%", () => {
-  assert.equal(E.clampPrice(2000, 1000), 1300);
-  assert.equal(E.clampPrice(100, 1000), 700);
-  assert.equal(E.quote(1290, 1000, "buy", 100).newP, 1300);
+  assert.equal(E.clampPrice(200, 100), 130);
+  assert.equal(E.clampPrice(10, 100), 70);
+  assert.equal(E.quote(129, 100, "buy", 100).newP, 130);
 });
 
 test("활동 점수 EMA 와 내재가치", () => {
   assert.equal(E.nextActivity(50, 5, 5), 65);
   assert.equal(E.nextActivity(50, 0, 5), 35);
   assert.equal(E.nextActivity(50, 9, 5), 65);
-  assert.equal(E.fairValue(0), 500);
-  assert.equal(E.fairValue(100), 1500);
+  assert.equal(E.fairValue(0), 50);
+  assert.equal(E.fairValue(100), 150);
 });
 
 test("승인 필요 수", () => {
@@ -63,9 +63,25 @@ test("승인 필요 수", () => {
   assert.equal(E.approvalsNeeded(3), 2);
 });
 
-test("닉네임", () => {
-  assert.equal(E.validNickname("반스닥왕"), true);
-  assert.equal(E.validNickname("a"), false);
-  assert.equal(E.validNickname("나는 왕"), false);
-  assert.equal(E.validNickname("ㅅㅂ123"), false);
+test("시작 코인으로 보유 한도까지 살 수 있다", () => {
+  const b = E.quote(E.IPO_PRICE, E.IPO_PRICE, "buy", 95);
+  assert.ok(-b.cashDelta <= E.START_CASH);
+  assert.ok(Math.abs(b.newP / E.IPO_PRICE - 1 - 0.0475) < 0.001); // 95주 → +4.75%
+});
+
+test("상한가는 6명이 100주씩이면 도달", () => {
+  let p = E.IPO_PRICE;
+  for (let i = 0; i < 6; i++) p = E.quote(p, E.IPO_PRICE, "buy", 100).newP;
+  assert.equal(p, 130);
+});
+
+test("닉네임은 프리셋 조합만", () => {
+  assert.equal(E.validNickname("용감한고양이07"), true);
+  assert.equal(E.makeNickname("졸린", "쿼카", 3), "졸린쿼카03");
+  assert.equal(E.validNickname("졸린쿼카03"), true);
+  assert.equal(E.validNickname("용감한고양이"), false);
+  assert.equal(E.validNickname("용감한김철수07"), false);
+  assert.equal(E.validNickname("시발고양이07"), false);
+  assert.equal(E.validNickname("용감한고양이123"), false);
+  for (const a of E.NICK_ADJ) for (const n of E.NICK_NOUN) assert.ok(E.makeNickname(a, n, 99).length <= 12, a + n);
 });
