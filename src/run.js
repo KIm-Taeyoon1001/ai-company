@@ -285,6 +285,7 @@ const main = {
   health,
   doctor,
   reset,
+  mailtest: async () => console.log(await toolImpl.notify({ text: '메일 발송 테스트입니다.', title: 'BLACK OUT — 테스트' })),
   dashboard: () => dashboard(),
   serve: () => serve().then(() => new Promise(() => {})), // Ctrl+C 까지 살아 있는다
   audit: () => audit(),
@@ -302,7 +303,7 @@ const main = {
 }[cmd || 'worker'];
 
 if (!main) {
-  console.error('사용법: node src/run.js [worker [role]|kick <role>|serve|serve|dashboard|drafts|ready|review <slug>|copy <slug>|approve <slug>|reject <slug> <사유>|done <slug> [url]|health|doctor|reset|seed]');
+  console.error('사용법: node src/run.js [worker [role]|kick <role>|serve|serve|dashboard|drafts|ready|review <slug>|copy <slug>|approve <slug>|reject <slug> <사유>|done <slug> [url]|health|doctor|reset|mailtest|seed]');
   process.exit(1);
 }
 

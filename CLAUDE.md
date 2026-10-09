@@ -123,6 +123,14 @@ published/  올린 뒤 기록. 같은 주제를 또 쓰지 않기 위한 기록�
 
 **모델 이름을 하드코딩하지 마라.** `.env` 에 `GROQ_MODEL` 을 고정하면 위 모델 전환이 막힌다.
 
+## 알림 메일
+
+Gmail 계정 두 개를 역할을 나눠 쓴다.
+- **보내는용** (`GMAIL_USER` + `GMAIL_APP_PASSWORD`): `notify` 가 SMTP 로 발송한다 (`src/mail.js`)
+- **확인용** (`MAIL_TO`): Claude 의 Gmail 커넥터에 연결된 계정. Claude 가 여기서 알림을 읽는다
+
+`node --env-file=.env src/run.js mailtest` 로 확인한다. 디스코드와 메일 중 설정된 쪽으로 다 간다.
+
 ## 알려진 제약
 
 - **Gemini 사용 불가** — 이 계정 키(`AQ.` 형식)가 404/403

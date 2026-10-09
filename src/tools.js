@@ -6,6 +6,7 @@ import path from 'node:path';
 import { enqueue, remember, recall, recordRevenue } from './db.js';
 import * as posts from './posts.js';
 import { expand, surveyPillar, todayTrends, PILLARS } from './keywords.js';
+import { mailConfigured, sendMail } from './mail.js';
 
 const ROOT = process.cwd();
 
@@ -221,14 +222,21 @@ export const toolImpl = {
   },
 
   async notify({ text, title = 'AI Company' }) {
+    // 디스코드와 메일 중 설정된 쪽으로 보낸다. 한쪽이 실패해도 다른 쪽은 간다.
+    const out = {};
     const url = process.env.DISCORD_WEBHOOK_URL;
-    if (!url) return { skipped: '알림 웹훅 미설정' };
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: `**${title}**\n${String(text).slice(0, 1800)}` }),
-    });
-    return { ok: res.ok, status: res.status };
+    if (url) {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: `**${title}**\n${String(text).slice(0, 1800)}` }),
+      }).catch((e) => ({ ok: false, status: e.message }));
+      out.discord = { ok: res.ok, status: res.status };
+    }
+    if (mailConfigured()) {
+      out.mail = await sendMail({ subject: title, text }).catch((e) => ({ ok: false, error: e.message }));
+    }
+    return Object.keys(out).length ? out : { skipped: '알림 채널 미설정' };
   },
 };
 
