@@ -1,0 +1,22 @@
+{
+  "name": "bansdaq-functions",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test lib/engine.test.js",
+    "deploy": "npm run build && firebase deploy --only functions",
+    "e2e": "npm run build && cd .. && firebase emulators:exec --project demo-bansdaq --only auth,firestore,functions \"cd functions && GCLOUD_PROJECT=demo-bansdaq FUNCTIONS_EMULATOR=true MARKET_ALWAYS_OPEN=1 node test/e2e.mjs\""
+  },
+  "dependencies": {
+    "firebase-admin": "^13.10.0",
+    "firebase-functions": "^7.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}

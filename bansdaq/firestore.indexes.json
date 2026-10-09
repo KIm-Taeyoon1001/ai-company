@@ -1,0 +1,18 @@
+{
+  "indexes": [
+    { "collectionGroup": "classes", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "listed", "order": "ASCENDING" }, { "fieldPath": "price", "order": "DESCENDING" } ] },
+    { "collectionGroup": "classes", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "listed", "order": "ASCENDING" }, { "fieldPath": "change", "order": "DESCENDING" } ] },
+    { "collectionGroup": "classes", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "listed", "order": "ASCENDING" }, { "fieldPath": "change", "order": "ASCENDING" } ] },
+    { "collectionGroup": "classes", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "schoolCode", "order": "ASCENDING" }, { "fieldPath": "ay", "order": "ASCENDING" },
+      { "fieldPath": "price", "order": "DESCENDING" } ] },
+    { "collectionGroup": "users", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "classId", "order": "ASCENDING" }, { "fieldPath": "status", "order": "ASCENDING" } ] },
+    { "collectionGroup": "trades", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "uid", "order": "ASCENDING" }, { "fieldPath": "ts", "order": "DESCENDING" } ] }
+  ],
+  "fieldOverrides": []
+}

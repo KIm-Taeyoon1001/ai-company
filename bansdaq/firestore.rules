@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 모든 쓰기는 Cloud Functions(관리자 권한)만. 클라이언트는 읽기만.
+
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // 반 시세·일봉·랭킹은 개인정보가 없으므로 비로그인 공개 → 랜딩에서 "너네 반 몇 위" 바로 보여줌
+    match /classes/{classId} {
+      allow read: if true;
+      allow write: if false;
+      match /{sub=**} {
+        allow read: if true;
+        allow write: if false;
+      }
+    }
+    match /rankings/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // 문서 ID = {uid}_{classId}. 없는 문서 get 도 허용해야 해서 ID 로 판정한다.
+    match /holdings/{id} {
+      allow get: if request.auth != null && id.split('_')[0] == request.auth.uid;
+      allow list: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+    match /trades/{id} {
+      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+  }
+}

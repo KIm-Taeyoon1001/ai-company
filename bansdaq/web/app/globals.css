@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/* 토스증권 톤: 흰 바탕, 큰 숫자, 상승 빨강·하락 파랑 */
+@theme {
+  --color-bg: #ffffff;
+  --color-card: #f9fafb;
+  --color-line: #e5e8eb;
+  --color-ink: #191f28;
+  --color-sub: #8b95a1;
+  --color-up: #f04452;
+  --color-down: #3182f6;
+  --color-brand: #f04452;
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #101013;
+    --color-card: #1b1c20;
+    --color-line: #2c2e33;
+    --color-ink: #f2f4f6;
+    --color-sub: #8b95a1;
+  }
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-feature-settings: "tnum";
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 상한가 연출: 불꽃 + 흔들림 */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-3px) rotate(-1deg); }
+  40% { transform: translateX(3px) rotate(1deg); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+}
+@keyframes flame {
+  0%, 100% { text-shadow: 0 0 8px #ff6b00, 0 0 18px #f04452; }
+  50% { text-shadow: 0 0 14px #ffb800, 0 0 28px #f04452; }
+}
+.limit-up { animation: shake 0.5s ease-in-out 3, flame 1.2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .limit-up { animation: none; }
+}
