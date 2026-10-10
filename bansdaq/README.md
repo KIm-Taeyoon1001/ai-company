@@ -25,8 +25,13 @@ bansdaq/
    cd functions && npm i && cd ..
    firebase deploy --only firestore,functions
    ```
-4. 웹: `web/.env.example` → `web/.env.local` 로 복사해 채운 뒤 `cd web && npm i && npm run dev`.
-   Vercel 에선 Root Directory 를 `bansdaq/web` 으로, 같은 환경변수를 넣는다.
+4. 웹 로컬: `web/.env.example` → `web/.env.local` 로 복사해 채운 뒤 `cd web && npm i && npm run dev`.
+5. 웹 배포 (Cloudflare Workers, OpenNext): GitHub 저장소 Settings → Secrets and variables → Actions 에
+   `CLOUDFLARE_API_TOKEN`·`CLOUDFLARE_ACCOUNT_ID`·`NEIS_KEY`(Secrets), `NEXT_PUBLIC_FIREBASE_*`(Variables) 를 넣으면
+   `.github/workflows/bansdaq-web.yml` 이 푸시마다 배포한다. 주소는 `https://bansdaq.<계정>.workers.dev`.
+   직접 하려면 `cd web && npx wrangler login && npm run cf:deploy`.
+   - Next 는 16.3.8 고정, 빌드는 webpack. Firestore 는 서버 번들에서도 브라우저 빌드로 alias 한다
+     (node 빌드의 protobufjs 가 `new Function` 을 써서 Workers 에서 모든 페이지가 500).
 
 ## 테스트
 
