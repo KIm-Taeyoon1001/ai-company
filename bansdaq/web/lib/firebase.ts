@@ -3,11 +3,16 @@ import { getAuth, connectAuthEmulator, Auth } from "firebase/auth";
 import { getFirestore, connectFirestoreEmulator, Firestore } from "firebase/firestore";
 import { getFunctions, connectFunctionsEmulator, httpsCallable, Functions } from "firebase/functions";
 
+/** Firebase 환경변수가 없으면 화면은 띄우되 데이터 기능은 "준비 중" 으로 둔다 */
+export const firebaseReady = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+const NOT_READY = "서버 연결 준비 중이에요. 곧 열려요!";
+
 // 서버 렌더링 중에 초기화하지 않도록 처음 쓰일 때 만든다.
 let cache: { app: FirebaseApp; auth: Auth; db: Firestore; fns: Functions } | null = null;
 
 export function fb() {
   if (cache) return cache;
+  if (!firebaseReady) throw new Error(NOT_READY);
   const app = getApps()[0] ?? initializeApp({
     apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
     authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,

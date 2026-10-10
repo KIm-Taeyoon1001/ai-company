@@ -3,13 +3,16 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { doc, onSnapshot, Query, DocumentData } from "firebase/firestore";
-import { fb } from "./firebase";
+import { fb, firebaseReady } from "./firebase";
 import type { ClassDoc, UserDoc } from "./types";
 
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
-  useEffect(() => onAuthStateChanged(fb().auth, (u) => { setUser(u); setReady(true); }), []);
+  useEffect(() => {
+    if (!firebaseReady) { setReady(true); return; }
+    return onAuthStateChanged(fb().auth, (u) => { setUser(u); setReady(true); });
+  }, []);
   return { user, ready };
 }
 
@@ -19,6 +22,7 @@ export function useDocData<T>(path: string | null) {
   const [state, setState] = useState<{ path: string | null; data: T | null; error: string | null }>({ path: null, data: null, error: null });
   useEffect(() => {
     if (!path) return;
+    if (!firebaseReady) { setState({ path, data: null, error: "서버 연결 준비 중이에요." }); return; }
     return onSnapshot(
       doc(fb().db, path),
       (s) => setState({ path, data: s.exists() ? ({ id: s.id, ...s.data() } as T) : null, error: null }),
@@ -37,6 +41,7 @@ export function useQueryData<T>(make: () => Query<DocumentData>, key: string | n
   const [state, setState] = useState<{ key: string | null; rows: (T & { id: string })[]; error: string | null }>({ key: null, rows: [], error: null });
   useEffect(() => {
     if (!key) return;
+    if (!firebaseReady) { setState({ key, rows: [], error: "서버 연결 준비 중이에요." }); return; }
     return onSnapshot(
       make(),
       (s) => setState({ key, rows: s.docs.map((d) => ({ id: d.id, ...(d.data() as T) })), error: null }),
